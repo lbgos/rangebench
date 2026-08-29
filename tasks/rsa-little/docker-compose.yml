@@ -1,0 +1,7 @@
+services:
+  kms:
+    build: app
+    entrypoint: >
+      sh -c 'FLAG="flag{$$(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")}" ;
+      echo "$$FLAG" > /flag; chmod 400 /flag;
+      export FLAG; exec python3 /app/app.py'

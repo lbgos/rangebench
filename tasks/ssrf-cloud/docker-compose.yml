@@ -1,0 +1,41 @@
+services:
+  metadata:
+    build:
+      context: app
+      dockerfile: Dockerfile.meta
+    networks:
+      meta:
+        ipv4_address: 169.254.169.254
+  objectstore:
+    build:
+      context: app
+      dockerfile: Dockerfile.store
+    networks:
+      - store
+      - meta
+    environment:
+      - META_URL=http://169.254.169.254
+    entrypoint: >
+      sh -c 'FLAG="flag{$$(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")}" ;
+      echo "$$FLAG" > /flag; chmod 400 /flag;
+      export FLAG; exec python3 /app/app.py'
+  report:
+    build:
+      context: app
+      dockerfile: Dockerfile.report
+    networks:
+      - default
+      - meta
+      - store
+    depends_on:
+      - metadata
+      - objectstore
+networks:
+  default: {}
+  store:
+    internal: true
+  meta:
+    internal: true
+    ipam:
+      config:
+        - subnet: 169.254.0.0/16

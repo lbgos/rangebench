@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+FLAG="flag{$(head -c16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+echo "$FLAG" > /flag
+chmod 400 /flag
+cp /usr/local/bin/lic /binshare/lic
+exec socat TCP-LISTEN:9999,reuseaddr,fork EXEC:/usr/local/bin/lic,stderr

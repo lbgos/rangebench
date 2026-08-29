@@ -1,0 +1,8 @@
+FROM python:3.12-alpine
+RUN apk add --no-cache openssh-client curl && adduser -D app && mkdir -p /opt/app /opt/cfg
+COPY app.py /opt/app/app.py
+COPY shop-entry.sh /entry.sh
+RUN chmod 755 /entry.sh
+USER app
+WORKDIR /opt/app
+ENTRYPOINT ["/bin/sh", "/entry.sh"]

@@ -1,0 +1,28 @@
+services:
+  dind:
+    build:
+      context: .
+      dockerfile: Dockerfile.dind
+    privileged: true
+    networks:
+      - default
+    volumes:
+      - dindroot:/root
+      - dindsock:/var/run
+  status:
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ulimits:
+      fsize:
+        soft: 1073741824
+        hard: 1073741824
+    build: web
+    networks:
+      - default
+    depends_on:
+      - dind
+    volumes:
+      - dindsock:/var/run
+volumes:
+  dindroot: {}
+  dindsock: {}

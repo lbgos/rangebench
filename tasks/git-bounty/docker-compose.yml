@@ -1,0 +1,7 @@
+services:
+  baker:
+    build: .
+    volumes:
+      - reposrc:/srv
+volumes:
+  reposrc: {}

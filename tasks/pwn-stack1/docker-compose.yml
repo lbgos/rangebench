@@ -1,0 +1,13 @@
+services:
+  greet:
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ulimits:
+      fsize:
+        soft: 1073741824
+        hard: 1073741824
+    build: src
+    volumes:
+      - bin:/binshare
+volumes:
+  bin: {}

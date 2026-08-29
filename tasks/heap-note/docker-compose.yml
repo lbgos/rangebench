@@ -1,0 +1,7 @@
+services:
+  notes:
+    build: src
+    volumes:
+      - bin:/binshare
+volumes:
+  bin: {}

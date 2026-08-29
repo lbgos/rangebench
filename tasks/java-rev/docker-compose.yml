@@ -1,0 +1,7 @@
+services:
+  lic:
+    build: src
+    volumes:
+      - bin:/binshare
+volumes:
+  bin: {}

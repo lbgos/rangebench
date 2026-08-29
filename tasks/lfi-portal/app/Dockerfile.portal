@@ -1,0 +1,8 @@
+FROM python:3.12-alpine
+RUN adduser -D app && mkdir -p /var/www/pages
+COPY portal.py /app/app.py
+RUN printf '<h1>about</h1>intranet portal v2.3' > /var/www/pages/about.html \
+ && printf '<h1>contact</h1>it@corp.invalid' > /var/www/pages/contact.html
+USER app
+WORKDIR /app
+CMD ["python3", "/app/app.py"]

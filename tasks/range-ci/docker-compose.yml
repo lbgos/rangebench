@@ -1,0 +1,36 @@
+services:
+  seeder:
+    build: seeder
+    volumes:
+      - www:/site/www
+      - share:/share
+  web:
+    build: web
+    networks:
+      - default
+    depends_on:
+      - seeder
+    volumes:
+      - www:/srv/www:ro
+  runner:
+    build: runner
+    networks:
+      - default
+      - core
+    volumes:
+      - share:/share
+  prod:
+    build: prod
+    networks:
+      - core
+    depends_on:
+      - runner
+    volumes:
+      - share:/share:ro
+networks:
+  default: {}
+  core:
+    internal: true
+volumes:
+  www: {}
+  share: {}

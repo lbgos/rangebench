@@ -1,0 +1,38 @@
+services:
+  ops:
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ulimits:
+      fsize:
+        soft: 1073741824
+        hard: 1073741824
+    build:
+      context: app
+      dockerfile: Dockerfile.ops
+    networks:
+      - core
+    entrypoint: >
+      sh -c 'FLAG="flag{$$(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")}" ;
+      echo "$$FLAG" > /root/flag; chmod 400 /root/flag;
+      mkdir -p /tok; OPS_TOKEN="$$(head -c24 /dev/urandom | od -An -tx1 | tr -d " \n")";
+      echo "$$OPS_TOKEN" > /tok/token; chmod 444 /tok/token;
+      export OPS_TOKEN; exec python3 /app/app.py'
+    volumes:
+      - token:/tok
+  portal:
+    build:
+      context: app
+      dockerfile: Dockerfile.portal
+    networks:
+      - default
+      - core
+    depends_on:
+      - ops
+    volumes:
+      - token:/etc/portal:ro
+networks:
+  default: {}
+  core:
+    internal: true
+volumes:
+  token: {}

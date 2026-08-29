@@ -1,0 +1,52 @@
+services:
+  vault:
+    build: vault
+    networks:
+      - core
+    volumes:
+      - vaultshare:/vaultshare
+  cfg:
+    build:
+      context: app
+      dockerfile: Dockerfile.cfg
+    networks:
+      - core
+    depends_on:
+      - vault
+    volumes:
+      - vaultshare:/vaultshare:ro
+      - cfgshare:/share
+  shop:
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    ulimits:
+      fsize:
+        soft: 1073741824
+        hard: 1073741824
+    build:
+      context: app
+      dockerfile: Dockerfile.shop
+    networks:
+      - edge
+      - core
+    depends_on:
+      - cfg
+    volumes:
+      - cfgshare:/opt/cfg:ro
+  mail-relay:
+    image: alpine:3.20
+    networks:
+      - edge
+    command: sh -c "while true; do echo '220 mail-relay ESMTP Postfix (decoy)'; sleep 1; done | nc -l -p 25"
+  metrics:
+    image: python:3.12-alpine
+    networks:
+      - core
+    command: python3 -c "from http.server import *; HTTPServer(('0.0.0.0',8000),BaseHTTPRequestHandler).serve_forever()"
+networks:
+  edge: {}
+  core:
+    internal: true
+volumes:
+  vaultshare: {}
+  cfgshare: {}

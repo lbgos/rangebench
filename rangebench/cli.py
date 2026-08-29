@@ -1,0 +1,414 @@
+"""CLI: list / check (oracle) / run (agent) / smoke."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import hashlib
+import html
+import json
+import math
+import os
+import statistics
+import subprocess
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+from .agent import AnthropicChatClient, ChatClient, ChatClientProtocol
+from .env import TASKS_DIR, load_all, load_task
+from .runner import (
+    DEFAULT_CTX_WINDOW,
+    DEFAULT_KEEP_TAIL,
+    DEFAULT_RESERVE,
+    DEFAULT_THRESHOLD,
+    run_attempt,
+    run_oracle,
+)
+
+RESULTS = Path(__file__).resolve().parent.parent / "results"
+
+
+def _wilson(p: float, n: int, z: float = 1.96) -> tuple[float, float]:
+    if n == 0:
+        return 0.0, 0.0
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    delta = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return max(0.0, (centre - delta) / denom), min(1.0, (centre + delta) / denom)
+
+
+def _get_git_commit() -> str | None:
+    for cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "--short", "HEAD"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip().splitlines()[0][:40]
+        except Exception:
+            continue
+    return os.environ.get("RANGEBENCH_COMMIT")
+
+
+def _get_attacker_digest() -> str | None:
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "--format", "{{index .RepoDigests 0}}", "rb-attacker:latest"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(
+            ["docker", "images", "--digests", "rb-attacker:latest", "--format", "{{.Digest}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip() and "sha256" in out.stdout:
+            return out.stdout.strip().splitlines()[0]
+    except Exception:
+        pass
+    return None
+
+
+def _get_task_set_hash() -> str:
+    try:
+        h = hashlib.sha256()
+        for p in sorted(TASKS_DIR.iterdir()):
+            j = p / "task.json"
+            if not j.exists():
+                continue
+            data = json.loads(j.read_text())
+            # deterministic canonical form, task id ensures order
+            blob = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+            h.update(p.name.encode())
+            h.update(blob)
+        return h.hexdigest()[:16]
+    except Exception:
+        return "unknown"
+
+
+def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None:
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "manifest_version": 1,
+            "id": doc.get("id"),
+            "model": doc.get("model"),
+            "base_url": doc.get("base_url"),
+            "provider": doc.get("provider", "openai"),
+            "ctx_window": doc.get("ctx_window"),
+            "started": doc.get("started"),
+            "finished": doc.get("finished"),
+            "harness_commit": _get_git_commit(),
+            "attacker_digest": _get_attacker_digest(),
+            "task_set_hash": _get_task_set_hash(),
+            "task_count": len(doc.get("tasks", [])),
+        }
+        if extra:
+            manifest.update(extra)
+        tmp = log_dir / "manifest.json.tmp"
+        tmp.write_text(json.dumps(manifest, indent=2))
+        os.replace(tmp, log_dir / "manifest.json")
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            (log_dir / "manifest.warn").write_text(str(exc))
+
+
+def _write_report_html(log_dir: Path, doc: dict) -> None:
+    try:
+        tasks = doc.get("tasks", [])
+        rows = []
+        for t in tasks:
+            out_tok = t.get("completion_tokens", 0) + t.get("reasoning_tokens", 0)
+            color = "#10b981" if t.get("solved") else "#9ca3af"
+            rows.append(
+                f"<tr><td>{html.escape(t.get('task', ''))}</td><td>{html.escape(t.get('category', ''))}</td><td>T{t.get('tier', '')}</td><td style='color:{color}'>{'pass' if t.get('solved') else 'fail'}</td><td>{t.get('turns_used', 0)}/{t.get('turns_budget', 0)}</td><td>{out_tok}</td><td>{t.get('wall_s', 0)}</td><td>{html.escape(t.get('end_reason', ''))}</td></tr>"
+            )
+        solved = sum(1 for t in tasks if t.get("solved"))
+        total = len(tasks)
+        body = f"<h1>rangebench {html.escape(doc.get('id', ''))}</h1><p>model {html.escape(doc.get('model', ''))} - {solved}/{total} - {html.escape(doc.get('started', ''))}</p><table border=1 cellpadding=6><tr><th>task</th><th>cat</th><th>tier</th><th>result</th><th>turns</th><th>out tok</th><th>wall</th><th>end</th></tr>{''.join(rows)}</table>"
+        html_doc = f"<!doctype html><meta charset=utf-8><title>rangebench {html.escape(doc.get('id', ''))}</title><style>body{{font-family:system-ui,sans-serif;margin:2rem}}table{{border-collapse:collapse}}th{{background:#f3f4f6}}</style>{body}"
+        tmp = log_dir / "report.html.tmp"
+        tmp.write_text(html_doc)
+        os.replace(tmp, log_dir / "report.html")
+    except Exception:
+        pass
+
+
+def cmd_list(_args: argparse.Namespace) -> None:
+    tasks = load_all()
+    print(
+        f"{'id':24} {'cat':10} {'tier':4} {'stages':6} {'turns':5} {'infra':6} {'out-budget':10} statement"
+    )
+    for t in tasks:
+        print(
+            f"{t.id:24} {t.category:10} T{t.tier:<3} {len(t.stages):<6} {t.turns:<5} {t.infra_timeout:<6} {t.max_output_tokens:<10} {t.statement[:60]}"
+        )
+
+
+def cmd_check(args: argparse.Namespace) -> None:
+    for tid in args.tasks:
+        run_oracle(load_task(tid))
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    base = (
+        os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
+        if not args.base_url
+        else args.base_url
+    )
+    if not args.base_url and "OPENAI_BASE_URL" not in os.environ:
+        print(f"[warn] OPENAI_BASE_URL not set, using default {base}", flush=True)
+    # provider switch
+    provider = getattr(args, "provider", "openai")
+    client: ChatClientProtocol
+    if provider == "anthropic":
+        client = AnthropicChatClient(
+            base_url=base,
+            api_key=os.environ.get("ANTHROPIC_API_KEY")
+            or os.environ.get("OPENAI_API_KEY", "dummy"),
+            model=args.model,
+        )
+    else:
+        client = ChatClient(
+            base_url=base,
+            api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
+            model=args.model,
+        )
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+    log_dir = RESULTS / run_id
+    out = RESULTS / f"{run_id}.json"
+    doc = {
+        "id": run_id,
+        "model": args.model,
+        "base_url": base,
+        "provider": provider,
+        "ctx_window": args.ctx_window,
+        "keep_tail": args.keep_tail,
+        "started": datetime.now(UTC).isoformat(),
+        "tasks": [],
+    }
+    # skeleton manifest early, best-effort
+    _write_manifest(log_dir, doc, extra={"status": "running"})
+    task_ids = args.tasks if args.tasks else [t.id for t in load_all()]
+    for tid in task_ids:
+        task = load_task(tid)
+        for trial in range(1, args.trials + 1):
+            project = f"rb-{task.id}-{trial}-{uuid.uuid4().hex[:6]}"
+            use_llm = getattr(args, "compact", "deterministic") == "llm"
+            res = run_attempt(
+                client,
+                task,
+                trial,
+                project,
+                log_dir,
+                keep=args.keep,
+                ctx_window=args.ctx_window,
+                reserve=args.reserve,
+                keep_tail=args.keep_tail,
+                threshold=args.threshold,
+                use_llm_compact=use_llm,
+            )
+            doc["tasks"].append(
+                {
+                    "task": task.id,
+                    "category": task.category,
+                    "tier": task.tier,
+                    "trial": trial,
+                    "solved_stages": res.solved,
+                    "stages_total": [s.name for s in task.stages],
+                    "solved": sorted(res.solved) == sorted(s.name for s in task.stages),
+                    "wrong": res.wrong,
+                    "turns_used": res.turns_used,
+                    "turns_budget": task.turns,
+                    "commands": res.commands,
+                    "prompt_tokens": res.prompt_tokens,
+                    "completion_tokens": res.completion_tokens,
+                    "reasoning_tokens": res.reasoning_tokens,
+                    "compaction_tokens": res.compaction_tokens,
+                    "wall_s": res.wall_s,
+                    "end_reason": res.end_reason,
+                    "max_output_tokens": task.max_output_tokens,
+                }
+            )
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(doc, indent=2))
+            (RESULTS / "latest.json").write_text(json.dumps(doc, indent=2))
+            _write_manifest(
+                log_dir,
+                doc,
+                extra={
+                    "status": "running",
+                    "progress": f"{len(doc['tasks'])}/{len(task_ids) * args.trials}",
+                },
+            )
+    doc["finished"] = datetime.now(UTC).isoformat()
+    out.write_text(json.dumps(doc, indent=2))
+    (RESULTS / "latest.json").write_text(json.dumps(doc, indent=2))
+    _write_manifest(log_dir, doc, extra={"status": "completed"})
+    _write_report_html(log_dir, doc)
+    print(f"wrote {out}")
+    print(f"wrote {log_dir / 'manifest.json'} and {log_dir / 'report.html'}")
+    solved = sum(1 for t in doc["tasks"] if t["solved"])
+    total = len(doc["tasks"])
+    print(f"tasks solved: {solved}/{total} runs")
+    from collections import defaultdict
+
+    by_cat = defaultdict(list)
+    for t in doc["tasks"]:
+        by_cat[t["category"]].append(t)
+    print("\nper-category:")
+    for cat, lst in sorted(by_cat.items()):
+        s = sum(1 for x in lst if x["solved"])
+        print(f"  {cat:10} {s}/{len(lst)}")
+    by_tier = defaultdict(list)
+    for t in doc["tasks"]:
+        by_tier[t["tier"]].append(t)
+    print("per-tier:")
+    for tier in sorted(by_tier):
+        lst = by_tier[tier]
+        s = sum(1 for x in lst if x["solved"])
+        print(f"  T{tier} {s}/{len(lst)}")
+    if args.trials > 1:
+        p = solved / total if total else 0
+        lo, hi = _wilson(p, total)
+        print(f"overall Wilson 95%: {p:.2%} [{lo:.2%}, {hi:.2%}] n={total}")
+    toks = [t["completion_tokens"] + t["reasoning_tokens"] for t in doc["tasks"]]
+    if toks:
+        print(
+            f"output tokens: mean {statistics.mean(toks):.0f} median {statistics.median(toks):.0f} max {max(toks)}"
+        )
+    print("\nper-task:")
+    print(f"{'task':20} {'solved':6} {'turns':10} {'out_tok':10} {'wall':8} end")
+    for t in doc["tasks"]:
+        out_tok = t["completion_tokens"] + t["reasoning_tokens"]
+        print(
+            f"{t['task']:20} {str(t['solved']):6} {t['turns_used']}/{t['turns_budget']:<6} {out_tok:<10} {t['wall_s']:<8} {t['end_reason']}"
+        )
+
+
+def cmd_probe(args: argparse.Namespace) -> None:
+    base = args.base_url or os.environ.get("OPENAI_BASE_URL", "http://localhost:8000/v1")
+    provider = getattr(args, "provider", "openai")
+    client: ChatClientProtocol
+    if provider == "anthropic":
+        client = AnthropicChatClient(
+            base,
+            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY", "dummy"),
+            args.model,
+        )
+    else:
+        client = ChatClient(base, os.environ.get("OPENAI_API_KEY", "dummy"), args.model)
+    content, usage, err = client.chat(
+        [{"role": "user", "content": "Reply with exactly: COMMAND:\necho ok"}], 512
+    )
+    print(f"err={err}\nusage={usage}\ncontent={content!r}")
+
+
+def cmd_preflight(_args: argparse.Namespace) -> None:
+    """Check docker, compose, and pull all task images without running tasks."""
+    import shutil
+
+    if shutil.which("docker") is None:
+        print("docker not found", flush=True)
+        raise SystemExit(1)
+    subprocess.run(["docker", "version"], check=False)
+    res = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)
+    if res.returncode != 0:
+        print("docker compose not found, need docker compose plugin", flush=True)
+        raise SystemExit(1)
+    print(res.stdout.strip())
+    res = subprocess.run(
+        ["docker", "images", "rb-attacker:latest", "--format", "{{.Repository}}"],
+        capture_output=True,
+        text=True,
+    )
+    if "rb-attacker" not in res.stdout:
+        print("[preflight] rb-attacker image not found, building...", flush=True)
+        subprocess.run(["docker", "build", "-t", "rb-attacker:latest", "attacker"], check=False)
+    else:
+        d = _get_attacker_digest()
+        if d:
+            print(f"attacker digest: {d}")
+    tasks_dir = Path(__file__).resolve().parent.parent / "tasks"
+    for task_dir in sorted(tasks_dir.iterdir()):
+        compose = task_dir / "docker-compose.yml"
+        if not compose.exists():
+            continue
+        print(f"[preflight] pulling {task_dir.name} ...", flush=True)
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose), "pull", "--quiet"], check=False, timeout=600
+        )
+    print(f"task set hash: {_get_task_set_hash()}")
+    commit = _get_git_commit()
+    if commit:
+        print(f"harness commit: {commit}")
+    print("preflight done")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="rangebench")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list").set_defaults(func=cmd_list)
+    chk = sub.add_parser("check", help="run oracle solutions against live envs")
+    chk.add_argument("tasks", nargs="+")
+    chk.set_defaults(func=cmd_check)
+    run = sub.add_parser("run", help="run agent against tasks")
+    run.add_argument("--model", required=True)
+    run.add_argument(
+        "--base-url",
+        default=None,
+        help="OpenAI base url, default $OPENAI_BASE_URL or http://localhost:8000/v1",
+    )
+    run.add_argument(
+        "--provider", choices=["openai", "anthropic"], default="openai", help="wire format"
+    )
+    run.add_argument("tasks", nargs="*")
+    run.add_argument("--trials", type=int, default=1)
+    run.add_argument("--keep", action="store_true", help="skip teardown (debug)")
+    run.add_argument(
+        "--ctx-window",
+        type=int,
+        default=DEFAULT_CTX_WINDOW,
+        help="context window for auto compaction",
+    )
+    run.add_argument(
+        "--reserve", type=int, default=DEFAULT_RESERVE, help="reserve tokens for compaction output"
+    )
+    run.add_argument(
+        "--keep-tail",
+        type=int,
+        default=DEFAULT_KEEP_TAIL,
+        help="tail turns kept verbatim after compaction",
+    )
+    run.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help="compaction threshold fraction of ctx window",
+    )
+    run.add_argument(
+        "--compact",
+        choices=["deterministic", "llm"],
+        default="deterministic",
+        help="compaction mode, deterministic is default, llm is opt-in ablation",
+    )
+    run.set_defaults(func=cmd_run)
+    probe = sub.add_parser("probe")
+    probe.add_argument("--model", required=True)
+    probe.add_argument("--base-url", default=None)
+    probe.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    probe.set_defaults(func=cmd_probe)
+    pf = sub.add_parser("preflight", help="pull all images and check docker setup")
+    pf.set_defaults(func=cmd_preflight)
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
