@@ -9,7 +9,7 @@ from unittest.mock import patch
 from rangebench.agent import Usage
 from rangebench.cli import _get_git_commit, _get_task_set_hash, cmd_preflight, cmd_run
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
-from rangebench.runner import AttemptResult
+from rangebench.runner import AttemptResult, _maybe_compact
 
 
 class AccountingTests(unittest.TestCase):
@@ -24,6 +24,87 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual(usage.completion_tokens, 40)
         self.assertEqual(usage.reasoning_tokens, 30)
+
+    def test_openai_cache_and_missing_metadata_are_distinct(self) -> None:
+        usage = Usage()
+        usage.add(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 40,
+                "prompt_tokens_details": {"cached_tokens": 60},
+                "completion_tokens_details": {"reasoning_tokens": 30},
+            }
+        )
+        usage.add({"prompt_tokens": 20, "completion_tokens": 5})
+        self.assertEqual((usage.input_tokens, usage.output_tokens), (120, 45))
+        self.assertEqual(usage.cache_read_tokens, 60)
+        self.assertIsNone(usage.cache_write_tokens)
+        self.assertEqual((usage.cache_read_reported_calls, usage.calls), (1, 2))
+
+        zero = Usage()
+        zero.add(
+            {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 3},
+            }
+        )
+        self.assertEqual(zero.cache_read_tokens, 0)
+        self.assertEqual(zero.reasoning_tokens, 3)
+
+    def test_anthropic_input_includes_both_cache_buckets(self) -> None:
+        usage = Usage()
+        usage.add(
+            {
+                "input_tokens": 20,
+                "cache_creation_input_tokens": 100,
+                "cache_read_input_tokens": 200,
+                "output_tokens": 30,
+            },
+            provider="anthropic",
+        )
+        self.assertEqual((usage.input_tokens, usage.output_tokens), (320, 30))
+        self.assertEqual((usage.cache_read_tokens, usage.cache_write_tokens), (200, 100))
+        self.assertEqual((usage.cache_read_reported_calls, usage.cache_write_reported_calls), (1, 1))
+
+    def test_compaction_usage_is_separate_and_in_total(self) -> None:
+        class Compactor:
+            def chat(self, messages: list[dict], max_tokens: int, temperature: float = 0.2):
+                usage = Usage()
+                usage.add(
+                    {
+                        "prompt_tokens": 200,
+                        "completion_tokens": 50,
+                        "prompt_tokens_details": {"cached_tokens": 100},
+                    }
+                )
+                return "state snapshot", usage, None
+
+        res = AttemptResult("sample", 1)
+        events: list[tuple[str, dict]] = []
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "task"},
+            *({"role": "user", "content": "history " * 30} for _ in range(4)),
+        ]
+        compacted = _maybe_compact(
+            Compactor(),
+            messages,
+            res,
+            ctx_window=100,
+            reserve=10,
+            keep_tail=1,
+            threshold=0.8,
+            use_llm=True,
+            emit=lambda kind, **kv: events.append((kind, kv)),
+        )
+        self.assertLess(len(compacted), len(messages))
+        self.assertEqual(res.compaction_tokens, 250)
+        self.assertEqual(res.total_usage().input_tokens, 200)
+        self.assertEqual(res.total_usage().cache_read_tokens, 100)
+        self.assertEqual(events[0][0], "compaction-call")
+        self.assertEqual(events[0][1]["usage"]["cache_read_tokens"], 100)
 
     def test_challenge_code_changes_task_set_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +206,19 @@ class AccountingTests(unittest.TestCase):
             compact="deterministic",
             keep=False,
         )
+        result = AttemptResult(task.id, 1, end_reason="llm error")
+        result.model_usage.add(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 40,
+                "prompt_tokens_details": {"cached_tokens": 60},
+            }
+        )
+        result.compaction_usage.add(
+            {"prompt_tokens": 20, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 0}}
+        )
+        result.prompt_tokens = 100
+        result.completion_tokens = 40
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 patch("rangebench.cli.RESULTS", Path(tmp)),
@@ -132,7 +226,7 @@ class AccountingTests(unittest.TestCase):
                 patch("rangebench.cli.ChatClient"),
                 patch(
                     "rangebench.cli.run_attempt",
-                    return_value=AttemptResult(task.id, 1, end_reason="llm error"),
+                    return_value=result,
                 ) as run_attempt,
                 patch("rangebench.cli._get_attacker_digest", return_value="sha256:test"),
             ):
@@ -140,9 +234,13 @@ class AccountingTests(unittest.TestCase):
                     cmd_run(args)
             self.assertEqual(caught.exception.code, 1)
             self.assertEqual(run_attempt.call_args.kwargs["attacker_image"], "sha256:test")
-            self.assertEqual(
-                json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]["scored"], False
-            )
+            saved = json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]
+            self.assertFalse(saved["scored"])
+            self.assertEqual((saved["input_tokens"], saved["output_tokens"]), (120, 45))
+            self.assertEqual(saved["cache_read_tokens"], 60)
+            self.assertEqual(saved["compaction_cache_read_tokens"], 0)
+            self.assertIsNone(saved["cache_write_tokens"])
+            self.assertEqual(saved["cache_read_reported_calls"], 2)
             manifest = next(Path(tmp).glob("*/manifest.json"))
             self.assertEqual(json.loads(manifest.read_text())["status"], "completed_with_errors")
 

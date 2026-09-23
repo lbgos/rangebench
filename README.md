@@ -61,7 +61,7 @@ Live results at [lbgos.dev/bench](https://lbgos.dev/bench).
 
 ## reproducibility
 
-Pin these for a comparable run: task source, harness source, and attacker image ID. `run` writes their fingerprints to `manifest.json`. A failed environment or model API call marks the trial invalid, excludes it from the score, and makes the command exit nonzero after writing artifacts. `completion_tokens` includes reasoning tokens, which are also reported as a breakdown. Compare only within one bench version.
+Pin these for a comparable run: task source, harness source, and attacker image ID. `run` writes their fingerprints to `manifest.json`. A failed environment or model API call marks the trial invalid, excludes it from the score, and makes the command exit nonzero after writing artifacts. `completion_tokens` includes reasoning tokens, which are also reported as a breakdown. `input_tokens` and `output_tokens` include compaction calls; `prompt_tokens` and `completion_tokens` retain the agent-call totals. Cache read/write totals include reported values only. A `null` cache count means no cache count was reported; `0` means a reported zero. Check `cache_*_reported_calls` and `input/output_reported_calls` against `api_calls` before pricing a run. `api_requests` counts retries too, which may lack usage. Each returned call's usage is also in the attempt JSONL. Compare only within one bench version.
 
 ## notes
 

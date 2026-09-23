@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .agent import SYSTEM, ChatClientProtocol, parse_turn
+from .agent import SYSTEM, ChatClientProtocol, Usage, parse_turn
 from .env import ATTACKER_IMAGE, EnvError, Task, TaskEnv, truncate_output
 
 WRONG_LIMIT = 3
@@ -42,9 +42,17 @@ class AttemptResult:
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     compaction_tokens: int = 0
+    model_usage: Usage = field(default_factory=Usage)
+    compaction_usage: Usage = field(default_factory=Usage)
     wall_s: float = 0.0
     end_reason: str = ""
     stage_flags: dict[str, str] = field(default_factory=dict)  # ground truth read at scoring
+
+    def total_usage(self) -> Usage:
+        total = Usage()
+        total.merge(self.model_usage)
+        total.merge(self.compaction_usage)
+        return total
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
@@ -68,10 +76,10 @@ def _deterministic_trim(messages: list[dict], keep_tail: int) -> list[dict]:
 
 def _compact_history_llm(
     client: ChatClientProtocol, messages: list[dict], keep_tail: int
-) -> tuple[list[dict], int, str | None]:
-    """Summarize middle of history via separate LLM call. Returns (new_messages, compaction_tokens, error)."""
+) -> tuple[list[dict], Usage, str | None]:
+    """Summarize middle of history via a separately metered LLM call."""
     if len(messages) <= keep_tail + 3:
-        return messages, 0, None
+        return messages, Usage(), None
     head = messages[:2]
     middle = messages[2:-keep_tail] if keep_tail > 0 else messages[2:]
     tail = messages[-keep_tail:] if keep_tail > 0 else []
@@ -82,24 +90,24 @@ def _compact_history_llm(
         {"role": "system", "content": COMPACTION_SYSTEM},
         {"role": "user", "content": f"Summarize this penetration test session so far:\n\n{convo}"},
     ]
+    usage = Usage()
     try:
         summary, usage, err = client.chat(comp_messages, max_tokens=2048, temperature=0.0)
         if err or not summary.strip():
             raise RuntimeError(err or "empty summary")
-        tokens = usage.prompt_tokens + usage.completion_tokens
         summary_msg = {
             "role": "user",
             "content": f"[COMPACTION SUMMARY - earlier history summarized, {len(middle)} messages compressed. Keep this as memory and continue.]\n{summary.strip()}\n[END SUMMARY - last {keep_tail} turns below are verbatim]",
         }
         new_messages = head + [summary_msg] + tail
-        return new_messages, tokens, None
+        return new_messages, usage, None
     except Exception as exc:
         note = {
             "role": "user",
             "content": f"[earlier {len(middle)} messages trimmed for context window; your notes in /work and environment are memory]",
         }
         new_messages = head + [note] + tail
-        return new_messages, 0, str(exc)
+        return new_messages, usage, str(exc)
 
 
 def _maybe_compact(
@@ -123,8 +131,11 @@ def _maybe_compact(
         if est < limit:
             return messages
     if use_llm:
-        new_messages, comp_tokens, err = _compact_history_llm(client, messages, keep_tail)
+        new_messages, usage, err = _compact_history_llm(client, messages, keep_tail)
+        res.compaction_usage.merge(usage)
+        comp_tokens = usage.prompt_tokens + usage.completion_tokens
         res.compaction_tokens += comp_tokens
+        emit("compaction-call", usage=usage.as_dict(), error=err)
         if err:
             emit(
                 "compaction-fallback",
@@ -231,9 +242,11 @@ def run_attempt(
                 emit,
             )
             content, usage, err = client.chat(messages, max_tokens=task.max_tokens)
+            res.model_usage.merge(usage)
             res.prompt_tokens += usage.prompt_tokens
             res.completion_tokens += usage.completion_tokens
             res.reasoning_tokens += usage.reasoning_tokens
+            emit("llm-call", n=turn, usage=usage.as_dict(), error=err)
             if err:
                 emit("llm-error", error=err)
                 res.end_reason = "llm error"
@@ -344,6 +357,9 @@ def run_attempt(
             ctok=res.completion_tokens,
             rtok=res.reasoning_tokens,
             compaction_tokens=res.compaction_tokens,
+            usage=res.total_usage().as_dict(),
+            model_usage=res.model_usage.as_dict(),
+            compaction_usage=res.compaction_usage.as_dict(),
         )
         log.close()
         if not keep:

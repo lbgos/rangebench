@@ -233,6 +233,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 use_llm_compact=use_llm,
                 attacker_image=attacker_digest,
             )
+            usage = res.total_usage()
             doc["tasks"].append(
                 {
                     "task": task.id,
@@ -255,6 +256,21 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "completion_tokens": res.completion_tokens,
                     "reasoning_tokens": res.reasoning_tokens,
                     "compaction_tokens": res.compaction_tokens,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cache_read_tokens": usage.cache_read_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
+                    "api_calls": usage.calls,
+                    "api_requests": usage.requests,
+                    "usage_reported_calls": usage.reported_calls,
+                    "input_reported_calls": usage.input_reported_calls,
+                    "output_reported_calls": usage.output_reported_calls,
+                    "cache_read_reported_calls": usage.cache_read_reported_calls,
+                    "cache_write_reported_calls": usage.cache_write_reported_calls,
+                    "compaction_input_tokens": res.compaction_usage.input_tokens,
+                    "compaction_output_tokens": res.compaction_usage.output_tokens,
+                    "compaction_cache_read_tokens": res.compaction_usage.cache_read_tokens,
+                    "compaction_cache_write_tokens": res.compaction_usage.cache_write_tokens,
                     "wall_s": res.wall_s,
                     "end_reason": res.end_reason,
                     "max_output_tokens": task.max_output_tokens,

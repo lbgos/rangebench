@@ -40,20 +40,103 @@ class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
     calls: int = 0
+    requests: int = 0
+    reported_calls: int = 0
+    input_reported_calls: int = 0
+    output_reported_calls: int = 0
+    cache_read_reported_calls: int = 0
+    cache_write_reported_calls: int = 0
 
-    def add(self, other: dict | None) -> None:
-        if not other:
+    def add(self, other: dict | None, *, provider: str = "openai") -> None:
+        self.calls += 1
+        if not isinstance(other, dict):
             return
-        self.prompt_tokens += int(other.get("prompt_tokens") or 0)
-        rt = other.get("completion_tokens_details") or {}
-        reasoning = int(rt.get("reasoning_tokens") or other.get("reasoning_tokens") or 0)
+        self.reported_calls += 1
+        prompt_details = other.get("prompt_tokens_details") or {}
+        input_details = other.get("input_tokens_details") or {}
+        output_details = other.get("completion_tokens_details") or {}
+        if not output_details:
+            output_details = other.get("output_tokens_details") or {}
+        if "prompt_tokens" in other or "input_tokens" in other:
+            self.input_reported_calls += 1
+        if "completion_tokens" in other or "output_tokens" in other:
+            self.output_reported_calls += 1
+        if provider == "anthropic":
+            read = other.get("cache_read_input_tokens")
+            write = other.get("cache_creation_input_tokens")
+            # Anthropic's input_tokens excludes both cache buckets.
+            self.prompt_tokens += (
+                int(other.get("input_tokens") or 0) + int(read or 0) + int(write or 0)
+            )
+        else:
+            read = prompt_details.get("cached_tokens")
+            if read is None:
+                read = input_details.get("cached_tokens")
+            write = other.get("cache_write_tokens")
+            if write is None:
+                write = prompt_details.get("cache_write_tokens")
+            if write is None:
+                write = input_details.get("cache_write_tokens")
+            self.prompt_tokens += int(other.get("prompt_tokens") or other.get("input_tokens") or 0)
+        if read is not None:
+            self.cache_read_tokens = (self.cache_read_tokens or 0) + int(read)
+            self.cache_read_reported_calls += 1
+        if write is not None:
+            self.cache_write_tokens = (self.cache_write_tokens or 0) + int(write)
+            self.cache_write_reported_calls += 1
+        reasoning = int(
+            output_details.get("reasoning_tokens") or other.get("reasoning_tokens") or 0
+        )
         # OpenAI completion_tokens already includes reasoning_tokens. Keep the
         # latter as a breakdown, not an additional charge against the budget.
         completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
         self.completion_tokens += max(completion, reasoning)
         self.reasoning_tokens += reasoning
-        self.calls += 1
+
+    @property
+    def input_tokens(self) -> int:
+        return self.prompt_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.completion_tokens
+
+    def as_dict(self) -> dict:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "calls": self.calls,
+            "requests": self.requests,
+            "reported_calls": self.reported_calls,
+            "input_reported_calls": self.input_reported_calls,
+            "output_reported_calls": self.output_reported_calls,
+            "cache_read_reported_calls": self.cache_read_reported_calls,
+            "cache_write_reported_calls": self.cache_write_reported_calls,
+        }
+
+    def merge(self, other: Usage) -> None:
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.reasoning_tokens += other.reasoning_tokens
+        self.calls += other.calls
+        self.requests += other.requests
+        self.reported_calls += other.reported_calls
+        self.input_reported_calls += other.input_reported_calls
+        self.output_reported_calls += other.output_reported_calls
+        self.cache_read_reported_calls += other.cache_read_reported_calls
+        self.cache_write_reported_calls += other.cache_write_reported_calls
+        if other.cache_read_tokens is not None:
+            self.cache_read_tokens = (self.cache_read_tokens or 0) + other.cache_read_tokens
+        if other.cache_write_tokens is not None:
+            self.cache_write_tokens = (self.cache_write_tokens or 0) + other.cache_write_tokens
 
 
 class ChatClientProtocol(Protocol):
@@ -87,10 +170,10 @@ class ChatClient:
         last_err: Exception | None = None
         usage = Usage()
         for attempt in range(4):
+            usage.requests += 1
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
-                usage = Usage()
                 usage.add(body.get("usage"))
                 choice = (body.get("choices") or [{}])[0]
                 msg = choice.get("message") or {}
@@ -159,15 +242,11 @@ class AnthropicChatClient:
         last_err: Exception | None = None
         usage = Usage()
         for attempt in range(4):
+            usage.requests += 1
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
-                usage = Usage()
-                # Anthropic usage: input_tokens, output_tokens
-                u = body.get("usage") or {}
-                usage.prompt_tokens = int(u.get("input_tokens") or 0)
-                usage.completion_tokens = int(u.get("output_tokens") or 0)
-                usage.calls = 1
+                usage.add(body.get("usage"), provider="anthropic")
                 content_blocks = body.get("content") or []
                 text = ""
                 for b in content_blocks:
