@@ -86,7 +86,7 @@ def _compact_history_llm(
         summary, usage, err = client.chat(comp_messages, max_tokens=2048, temperature=0.0)
         if err or not summary.strip():
             raise RuntimeError(err or "empty summary")
-        tokens = usage.prompt_tokens + usage.completion_tokens + usage.reasoning_tokens
+        tokens = usage.prompt_tokens + usage.completion_tokens
         summary_msg = {
             "role": "user",
             "content": f"[COMPACTION SUMMARY - earlier history summarized, {len(middle)} messages compressed. Keep this as memory and continue.]\n{summary.strip()}\n[END SUMMARY - last {keep_tail} turns below are verbatim]",
@@ -185,6 +185,7 @@ def run_attempt(
             emit("canary", canary=task.canary)
     except EnvError as exc:
         res.end_reason = f"env: {exc}"
+        res.wall_s = round(time.time() - t0, 1)
         emit("fatal", reason=res.end_reason)
         if not keep:
             ok, warn = env.down()
@@ -206,7 +207,7 @@ def run_attempt(
             if time.time() > infra_deadline:
                 res.end_reason = "infra timeout"
                 break
-            total_out = res.completion_tokens + res.reasoning_tokens
+            total_out = res.completion_tokens
             if total_out >= task.max_output_tokens:
                 res.end_reason = "output token budget"
                 emit(

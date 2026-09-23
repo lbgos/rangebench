@@ -46,11 +46,13 @@ class Usage:
         if not other:
             return
         self.prompt_tokens += int(other.get("prompt_tokens") or 0)
-        self.completion_tokens += int(other.get("completion_tokens") or 0)
         rt = other.get("completion_tokens_details") or {}
-        self.reasoning_tokens += int(
-            rt.get("reasoning_tokens") or other.get("reasoning_tokens") or 0
-        )
+        reasoning = int(rt.get("reasoning_tokens") or other.get("reasoning_tokens") or 0)
+        # OpenAI completion_tokens already includes reasoning_tokens. Keep the
+        # latter as a breakdown, not an additional charge against the budget.
+        completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
+        self.completion_tokens += max(completion, reasoning)
+        self.reasoning_tokens += reasoning
         self.calls += 1
 
 

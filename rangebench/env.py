@@ -93,7 +93,10 @@ def load_all() -> list[Task]:
 
 
 def _run(cmd: list[str], timeout: int = 300, check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise EnvError(f"{' '.join(cmd[:6])}... timed out after {timeout}s") from exc
     if check and proc.returncode != 0:
         raise EnvError(f"{' '.join(cmd[:6])}... failed: {(proc.stderr or proc.stdout)[-800:]}")
     return proc
