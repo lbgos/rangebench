@@ -22,7 +22,7 @@ The model gets one `COMMAND:` per turn and sees the `OBSERVATION` back. It submi
 
 Each attempt starts a fresh compose project and a fresh attacker container on the task network. The attacker has nmap, curl, pwntools, gdb, and the usual tools.
 
-History compaction happens before the model context limit. The harness keeps up to the last 12 turns verbatim and summarizes earlier history with the same model. Summary calls are recorded as `compaction_tokens`.
+History compaction happens before the model context limit. The harness keeps up to the last 12 turns verbatim and summarizes all earlier history in bounded chunks with the same model. Confirmed stages and submitted flags stay in a separate memory block across repeated compactions. Summary calls are recorded as `compaction_tokens`. A context-length error halves the working window and retries the model turn without repeating its shell command.
 
 ## quickstart
 
