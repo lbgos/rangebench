@@ -272,16 +272,16 @@ def _compact_history_llm(
     note_chars: int = 6500,
     ctx_window: int = DEFAULT_CTX_WINDOW,
     token_density: float = 1.5,
-) -> tuple[list[dict], Usage, str | None]:
+) -> tuple[list[dict], Usage, str | None, bool]:
     """Process every middle message in bounded, separately metered summary calls."""
     ctx_window = min(ctx_window, MAX_CTX_WINDOW)
     head, middle, tail = _split_history(messages, keep_tail)
     if not middle:
-        return messages, Usage(), None
+        return messages, Usage(), None, False
     facts_block = _facts_block(messages)
     narrative_chars = note_chars - len(facts_block) - 80
     if narrative_chars < 128:
-        return messages, Usage(), "confirmed stage facts exceed compaction budget"
+        return messages, Usage(), "confirmed stage facts exceed compaction budget", False
     summary_max_tokens = min(2048, max(256, ctx_window // 8))
     prefix = f"Original task:\n{head[1]['content']}\n\n"
     safety = max(256, ctx_window // 16)
@@ -292,6 +292,7 @@ def _compact_history_llm(
             _deterministic_trim(messages, keep_tail, note_chars),
             Usage(),
             "compaction prompt exceeds context window",
+            False,
         )
     total_usage = Usage()
     summary = ""
@@ -310,12 +311,15 @@ def _compact_history_llm(
                 {"role": "system", "content": COMPACTION_SYSTEM},
                 {"role": "user", "content": prefix + memory + "Transcript chunk:\n" + chunk},
             ]
-            next_summary, usage, err = client.chat(
-                comp_messages, max_tokens=summary_max_tokens, temperature=0.0
-            )
+            try:
+                next_summary, usage, err = client.chat(
+                    comp_messages, max_tokens=summary_max_tokens, temperature=0.0
+                )
+            except Exception as exc:
+                return messages, total_usage, str(exc), True
             total_usage.merge(usage)
             if err or not next_summary.strip():
-                raise RuntimeError(err or "empty summary")
+                return messages, total_usage, err or "empty compaction summary", True
             summary = _excerpt(next_summary.strip(), narrative_chars)
         summary_msg = {
             "role": "user",
@@ -327,9 +331,9 @@ def _compact_history_llm(
             ),
         }
         new_messages = head + [summary_msg] + tail
-        return new_messages, total_usage, None
+        return new_messages, total_usage, None, False
     except Exception as exc:
-        return _deterministic_trim(messages, keep_tail, note_chars), total_usage, str(exc)
+        return _deterministic_trim(messages, keep_tail, note_chars), total_usage, str(exc), False
 
 
 def _maybe_compact(
@@ -371,13 +375,17 @@ def _maybe_compact(
     tail_tokens = _calibrated_tokens(head + tail, previous_prompt_tokens, previous_estimate)
     note_chars = max(100, min(24000, int((limit - tail_tokens - 32) * 4 / token_density)))
     if use_llm:
-        new_messages, usage, err = _compact_history_llm(
+        new_messages, usage, err, api_error = _compact_history_llm(
             client, messages, keep_tail, min(note_chars, 6500), ctx_window, token_density
         )
         res.compaction_usage.merge(usage)
         comp_tokens = usage.prompt_tokens + usage.completion_tokens
         res.compaction_tokens += comp_tokens
         emit("compaction-call", usage=usage.as_dict(), error=err)
+        if api_error:
+            res.end_reason = "llm error"
+            emit("compaction-error", error=err, est_tokens=est, compaction_tokens=comp_tokens)
+            return messages
         if err:
             emit(
                 "compaction-fallback",
@@ -507,6 +515,8 @@ def run_attempt(
                     previous_prompt_tokens=previous_prompt_tokens,
                     previous_estimate=previous_estimate,
                 )
+                if res.end_reason:
+                    break
                 request_max_tokens = _request_max_tokens(
                     messages,
                     ctx_window,
@@ -537,7 +547,7 @@ def run_attempt(
                     continue
                 if err:
                     emit("llm-error", error=err)
-                    res.end_reason = f"llm: {err}"
+                    res.end_reason = "llm error"
                 break
             if res.end_reason:
                 break

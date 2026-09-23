@@ -227,8 +227,9 @@ class CompactionTests(unittest.TestCase):
     def test_llm_reads_full_history_and_preserves_recent_turns(self) -> None:
         messages = history(15, "x" * 4000 + "TAIL_MARKER")
         client = FakeClient("Known fact: stage one captured")
-        compacted, tokens, error = _compact_history_llm(client, messages, 12)
+        compacted, tokens, error, api_error = _compact_history_llm(client, messages, 12)
         self.assertIsNone(error)
+        self.assertFalse(api_error)
         self.assertEqual(tokens, 110)
         self.assertIn("Capture two flags", client.calls[0][1]["content"])
         self.assertIn("TAIL_MARKER", client.calls[0][1]["content"])
@@ -240,10 +241,11 @@ class CompactionTests(unittest.TestCase):
         messages[3]["content"] += " EARLY_MARKER"
         messages[-5]["content"] += " LATE_MARKER"
         client = CarryMarkerClient()
-        compacted, tokens, error = _compact_history_llm(
+        compacted, tokens, error, api_error = _compact_history_llm(
             client, messages, 2, ctx_window=8000, token_density=2.0
         )
         self.assertIsNone(error)
+        self.assertFalse(api_error)
         self.assertGreater(len(client.calls), 1)
         self.assertIn("EARLY_MARKER", client.calls[0][1]["content"])
         self.assertIn("LATE_MARKER", "".join(call[1]["content"] for call in client.calls))
@@ -306,7 +308,7 @@ class CompactionTests(unittest.TestCase):
         self.assertGreater(client.limits[0], 0)
         self.assertLess(client.limits[0], task.max_tokens)
 
-    def test_failed_summary_counts_usage_and_keeps_deterministic_memory(self) -> None:
+    def test_failed_summary_marks_attempt_invalid_without_fallback(self) -> None:
         messages = history(8, "service 8080 open " + "x" * 500)
         result = AttemptResult("test", 1)
         events: list[str] = []
@@ -322,8 +324,68 @@ class CompactionTests(unittest.TestCase):
             lambda kind, **kwargs: events.append(kind),
         )
         self.assertEqual(result.compaction_tokens, 110)
-        self.assertIn("compaction-fallback", events)
-        self.assertIn("service 8080 open", compacted[2]["content"])
+        self.assertEqual(result.end_reason, "llm error")
+        self.assertIn("compaction-error", events)
+        self.assertIs(compacted, messages)
+
+    def test_local_compaction_limit_keeps_deterministic_fallback(self) -> None:
+        messages = history(8, "port 8080 open")
+        compacted, tokens, error, api_error = _compact_history_llm(
+            FakeClient(), messages, 1, ctx_window=256
+        )
+        self.assertEqual(error, "compaction prompt exceeds context window")
+        self.assertFalse(api_error)
+        self.assertEqual(tokens, 0)
+        self.assertIn("port 8080 open", compacted[2]["content"])
+
+    def test_compaction_api_error_stops_trial_before_next_agent_call(self) -> None:
+        class FakeEnv:
+            def __init__(self, task: object, project: str) -> None:
+                pass
+
+            def up(self) -> None:
+                pass
+
+            def down(self) -> tuple[bool, None]:
+                return True, None
+
+            def read_flag(self, stage: object) -> str:
+                return "flag{web}"
+
+        class FailingCompactionClient(FakeClient):
+            agent_calls = 0
+
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                if temperature == 0.0:
+                    return "", Usage(prompt_tokens=100, completion_tokens=0), "HTTP 503"
+                self.agent_calls += 1
+                if self.agent_calls > 3:
+                    raise AssertionError("Agent call after compaction failure")
+                return "x" * 3900, Usage(prompt_tokens=100, completion_tokens=20), None
+
+        task = SimpleNamespace(
+            id="compaction-error",
+            statement="Capture the flag",
+            stages=[SimpleNamespace(name="web")],
+            turns=5,
+            infra_timeout=5,
+            max_tokens=100,
+            max_output_tokens=1000,
+            canary="",
+        )
+        client = FailingCompactionClient()
+        with TemporaryDirectory() as directory, patch("rangebench.runner.TaskEnv", FakeEnv):
+            result = run_attempt(
+                client, task, 1, "test", Path(directory), verbose=False,
+                ctx_window=5000, keep_tail=1, threshold=0.5, use_llm_compact=True,
+            )
+        self.assertEqual(result.end_reason, "llm error")
+        self.assertEqual(result.compaction_tokens, 100)
+        self.assertEqual(result.turns_used, 4)
+        self.assertEqual(len(client.calls), 4)
 
     def test_second_compaction_retains_old_memory_and_new_feedback(self) -> None:
         first = _deterministic_trim(history(8, "port 8080 open"), 2)
@@ -353,11 +415,11 @@ class CompactionTests(unittest.TestCase):
                 {"role": "user", "content": "OBSERVATION: keep looking"},
             ]
         )
-        first, _, error = _compact_history_llm(FakeClient("summary"), messages, 1)
+        first, _, error, api_error = _compact_history_llm(FakeClient("summary"), messages, 1)
         self.assertIsNone(error)
+        self.assertFalse(api_error)
         first.extend(history(3)[2:])
-        second, _, error = _compact_history_llm(FakeClient("", "summary failed"), first, 1)
-        self.assertEqual(error, "summary failed")
+        second = _deterministic_trim(first, 1)
         second.extend(history(3)[2:])
         third = _deterministic_trim(second, 1)
         for compacted in (first, second, third):
