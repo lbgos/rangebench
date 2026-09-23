@@ -200,12 +200,25 @@ class TaskEnv:
                 timeout=timeout,
             )
             stderr = (proc.stderr or "").lstrip()
-            if proc.returncode != 0:
-                if stderr.startswith(
-                    ("Cannot connect to the Docker daemon", "error during connect:")
-                ):
-                    raise EnvError("Docker daemon unavailable during attacker command")
-                if stderr.startswith("Error response from daemon:"):
+            if proc.returncode != 0 and stderr.startswith(
+                (
+                    "Cannot connect to the Docker daemon",
+                    "error during connect:",
+                    "Error response from daemon:",
+                )
+            ):
+                # docker exec forwards the command's stderr. Probe Docker itself
+                # before treating a matching message as an environment failure.
+                try:
+                    probe = subprocess.run(
+                        ["docker", "exec", self.attacker, "true"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise EnvError("Docker exec probe timed out") from exc
+                if probe.returncode != 0:
                     raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""

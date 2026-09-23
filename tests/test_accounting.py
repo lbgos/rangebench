@@ -49,8 +49,9 @@ class AccountingTests(unittest.TestCase):
         exec_failure = subprocess.CompletedProcess(
             [], 1, "", "Cannot connect to the Docker daemon"
         )
-        with patch("rangebench.env.subprocess.run", return_value=exec_failure):
-            with self.assertRaisesRegex(EnvError, "Docker daemon unavailable"):
+        probe_failure = subprocess.CompletedProcess([], 1, "", "daemon unavailable")
+        with patch("rangebench.env.subprocess.run", side_effect=[exec_failure, probe_failure]):
+            with self.assertRaisesRegex(EnvError, "Docker exec failed"):
                 env.exec("echo ok")
 
     def test_dead_attacker_container_is_not_a_model_command_failure(self) -> None:
@@ -59,9 +60,20 @@ class AccountingTests(unittest.TestCase):
         failure = subprocess.CompletedProcess(
             [], 1, "", "Error response from daemon: Container rb-test-atk is not running"
         )
-        with patch("rangebench.env.subprocess.run", return_value=failure):
+        probe_failure = subprocess.CompletedProcess([], 1, "", "container not running")
+        with patch("rangebench.env.subprocess.run", side_effect=[failure, probe_failure]):
             with self.assertRaisesRegex(EnvError, "Docker exec failed"):
                 env.exec("echo ok")
+
+    def test_model_stderr_that_looks_like_docker_error_is_scored(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        command = subprocess.CompletedProcess([], 1, "", "Error response from daemon: pretend")
+        probe = subprocess.CompletedProcess([], 0, "", "")
+        with patch("rangebench.env.subprocess.run", side_effect=[command, probe]):
+            rc, out = env.exec("printf 'Error response from daemon: pretend' >&2; exit 1")
+        self.assertEqual(rc, 1)
+        self.assertIn("pretend", out)
 
     def test_invalid_trial_exits_nonzero_after_writing_artifacts(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "web")])
