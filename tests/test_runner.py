@@ -40,7 +40,8 @@ class RunnerTests(unittest.TestCase):
             records = [json.loads(line) for line in (Path(tmp) / "sample-t1.jsonl").read_text().splitlines()]
 
         self.assertEqual(result.end_reason, "all stages captured")
-        self.assertIn("keep", [record["kind"] for record in records])
+        kinds = [record["kind"] for record in records]
+        self.assertLess(kinds.index("keep"), kinds.index("end"))
 
     def test_oracle_failure_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -52,6 +53,23 @@ class RunnerTests(unittest.TestCase):
                 "subprocess.run", return_value=SimpleNamespace(returncode=0, stderr="")
             ):
                 with self.assertRaisesRegex(EnvError, "oracle failed"):
+                    run_oracle(task)
+
+    def test_oracle_dependency_copy_failure_is_fatal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            solution = Path(tmp) / "solution"
+            solution.mkdir()
+            (solution / "solve.sh").write_text("#!/bin/sh\nexit 0\n")
+            (solution / "helper.sh").write_text("#!/bin/sh\n")
+            task = Task("sample", Path(tmp), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "target")])
+            copies = [
+                SimpleNamespace(returncode=0, stderr=""),
+                SimpleNamespace(returncode=1, stderr="copy failed"),
+            ]
+            with patch("rangebench.runner.TaskEnv", FakeEnv), patch(
+                "subprocess.run", side_effect=copies
+            ):
+                with self.assertRaisesRegex(EnvError, "docker cp helper.sh"):
                     run_oracle(task)
 
 
