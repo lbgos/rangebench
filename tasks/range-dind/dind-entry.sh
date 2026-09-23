@@ -12,7 +12,8 @@ while ! docker info >/dev/null 2>&1; do
   i=$((i+1))
   [ $i -gt 60 ] && { cat /var/log/dockerd.log; exit 1; }
 done
-# stopped backup job carrying the docker-era flag in its environment
-docker pull -q alpine:3.20 >/dev/null 2>&1 || true
-docker create --name backup-job -e "FLAG2=$F2" -e "JOB=cron-backup" alpine:3.20 true >/dev/null
+# Import the Alpine rootfs bundled at build time; the inner daemon has no Internet.
+tar -C /opt/alpine-rootfs -cf - . | docker image import - alpine:3.20.6 >/dev/null
+# Stopped backup job carrying the docker-era flag in its environment.
+docker create --name backup-job -e "FLAG2=$F2" -e "JOB=cron-backup" alpine:3.20.6 /bin/true >/dev/null
 exec sleep infinity

@@ -1,4 +1,7 @@
+FROM alpine:3.20.6 AS alpine-rootfs
+
 FROM docker:27-dind
+COPY --from=alpine-rootfs / /opt/alpine-rootfs/
 COPY dind-entry.sh /entry.sh
 RUN chmod 755 /entry.sh
 ENTRYPOINT ["/bin/sh", "/entry.sh"]

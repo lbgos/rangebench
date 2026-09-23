@@ -17,3 +17,6 @@ configs:
     file: gen.py
 volumes:
   incident: {}
+networks:
+  default:
+    internal: true

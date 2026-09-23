@@ -16,3 +16,6 @@ services:
       while true; do
       printf "SRVSTAT v2.1.3 | node=lab-mon-07 | services=ok | token=%s\n" "$$FLAG" | nc -l -p 31337;
       done'
+networks:
+  default:
+    internal: true

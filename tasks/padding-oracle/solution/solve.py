@@ -37,7 +37,13 @@ for i in range(len(ct) // 16 - 1, -1, -1):
         for guess in range(256):
             crafted[16 - k] = guess ^ pad_byte
             if try_pair(bytes(crafted), block):
-                # for the last byte, 0x01 vs 0x02.. ambiguity: validate with k+1 when k==1? accept when k<16 and verify next round
+                if k == 1:
+                    # A larger accidental padding also passes. Breaking the
+                    # penultimate byte leaves only a genuine 0x01 valid.
+                    check = bytearray(crafted)
+                    check[-2] ^= 1
+                    if not try_pair(bytes(check), block):
+                        continue
                 inter[16 - k] = guess
                 plain_block[16 - k] = guess ^ prev[16 - k]
                 found = True

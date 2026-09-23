@@ -31,7 +31,8 @@ services:
       - metadata
       - objectstore
 networks:
-  default: {}
+  default:
+    internal: true
   store:
     internal: true
   meta:

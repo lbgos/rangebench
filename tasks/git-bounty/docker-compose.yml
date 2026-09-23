@@ -5,3 +5,6 @@ services:
       - reposrc:/srv
 volumes:
   reposrc: {}
+networks:
+  default:
+    internal: true

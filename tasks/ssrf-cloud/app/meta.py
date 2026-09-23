@@ -1,7 +1,6 @@
 """Fake cloud metadata: hands out per-run tokens."""
 
 import json
-import os
 import random
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -19,7 +18,7 @@ class H(BaseHTTPRequestHandler):
                     "Code": "Success",
                     "Type": "AWS-HMAC-Token",
                     "Token": TOKEN,
-                    "ExpirySeconds": 3600,
+                    "TokenScope": "boot",
                 }
             ).encode()
         else:

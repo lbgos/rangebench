@@ -10,4 +10,5 @@ grep "Accepted password" auth.log | grep "$ATTACKER"
 USER=$(grep "Accepted password" auth.log | grep "$ATTACKER" | awk '{print $9}')
 echo "victim: $USER"
 echo "== staged secret =="
-grep -E "echo flag\{" syslog
+grep -F "sudo-command: $USER ran:" syslog | sed -n 's/.*printf %s \([A-Za-z0-9+/=]*\) | base64 -d.*/\1/p' | base64 -d
+echo

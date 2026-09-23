@@ -44,7 +44,8 @@ services:
       - core
     command: python3 -c "from http.server import *; HTTPServer(('0.0.0.0',8000),BaseHTTPRequestHandler).serve_forever()"
 networks:
-  edge: {}
+  edge:
+    internal: true
   core:
     internal: true
 volumes:
