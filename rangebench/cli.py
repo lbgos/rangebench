@@ -21,6 +21,7 @@ from .runner import (
     DEFAULT_KEEP_TAIL,
     DEFAULT_RESERVE,
     DEFAULT_THRESHOLD,
+    MAX_CTX_WINDOW,
     run_attempt,
     run_oracle,
 )
@@ -162,8 +163,8 @@ def cmd_check(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     if args.trials < 1:
         raise SystemExit("--trials must be at least 1")
-    if args.ctx_window <= args.reserve or args.reserve < 0:
-        raise SystemExit("--ctx-window must be greater than nonnegative --reserve")
+    if not 0 < args.ctx_window <= MAX_CTX_WINDOW or args.ctx_window <= args.reserve or args.reserve < 0:
+        raise SystemExit(f"--ctx-window must be above --reserve and at most {MAX_CTX_WINDOW}")
     if args.keep_tail < 0 or not 0 < args.threshold < 1:
         raise SystemExit("--keep-tail must be nonnegative and --threshold must be between 0 and 1")
     task_ids = args.tasks if args.tasks else [t.id for t in load_all()]
@@ -218,7 +219,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         task = load_task(tid)
         for trial in range(1, args.trials + 1):
             project = f"rb-{task.id}-{trial}-{uuid.uuid4().hex[:6]}"
-            use_llm = getattr(args, "compact", "deterministic") == "llm"
+            use_llm = getattr(args, "compact", "llm") == "llm"
             res = run_attempt(
                 client,
                 task,
@@ -422,7 +423,7 @@ def main() -> None:
         "--ctx-window",
         type=int,
         default=DEFAULT_CTX_WINDOW,
-        help="context window for auto compaction",
+        help=f"model context window for auto compaction, maximum {MAX_CTX_WINDOW}",
     )
     run.add_argument(
         "--reserve", type=int, default=DEFAULT_RESERVE, help="reserve tokens for compaction output"
@@ -442,8 +443,8 @@ def main() -> None:
     run.add_argument(
         "--compact",
         choices=["deterministic", "llm"],
-        default="deterministic",
-        help="compaction mode, deterministic is default, llm is opt-in ablation",
+        default="llm",
+        help="compaction mode, same-model llm is the default",
     )
     run.set_defaults(func=cmd_run)
     probe = sub.add_parser("probe")
