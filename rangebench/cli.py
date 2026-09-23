@@ -153,7 +153,7 @@ def cmd_list(_args: argparse.Namespace) -> None:
 
 def cmd_check(args: argparse.Namespace) -> None:
     for tid in args.tasks:
-        run_oracle(load_task(tid))
+        run_oracle(load_task(tid), project=f"rb-oracle-{uuid.uuid4().hex[:10]}")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
