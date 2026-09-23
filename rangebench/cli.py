@@ -231,6 +231,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 keep_tail=args.keep_tail,
                 threshold=args.threshold,
                 use_llm_compact=use_llm,
+                attacker_image=attacker_digest,
             )
             doc["tasks"].append(
                 {

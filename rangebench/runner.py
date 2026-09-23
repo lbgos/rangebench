@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent import SYSTEM, ChatClientProtocol, parse_turn
-from .env import EnvError, Task, TaskEnv, truncate_output
+from .env import ATTACKER_IMAGE, EnvError, Task, TaskEnv, truncate_output
 
 WRONG_LIMIT = 3
 
@@ -161,9 +161,10 @@ def run_attempt(
     keep_tail: int = DEFAULT_KEEP_TAIL,
     threshold: float = DEFAULT_THRESHOLD,
     use_llm_compact: bool = False,
+    attacker_image: str = ATTACKER_IMAGE,
 ) -> AttemptResult:
     res = AttemptResult(task_id=task.id, trial=trial)
-    env = TaskEnv(task, project)
+    env = TaskEnv(task, project, attacker_image)
     t0 = time.time()
     log_path = log_dir / f"{task.id}-t{trial}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)

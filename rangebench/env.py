@@ -105,10 +105,11 @@ def _run(cmd: list[str], timeout: int = 300, check: bool = True) -> subprocess.C
 class TaskEnv:
     """One attempt of one task: fresh compose project + fresh attacker container."""
 
-    def __init__(self, task: Task, project: str):
+    def __init__(self, task: Task, project: str, attacker_image: str = ATTACKER_IMAGE):
         self.task = task
         self.project = project
         self.attacker = f"{project}-atk"
+        self.attacker_image = attacker_image
 
     def up(self, build: bool = True) -> None:
         compose = [
@@ -164,7 +165,7 @@ class TaskEnv:
                 "-v",
                 pip_vol,
                 *vol_args,
-                ATTACKER_IMAGE,
+                self.attacker_image,
                 "sleep",
                 "infinity",
             ],
@@ -192,6 +193,19 @@ class TaskEnv:
         self, cmd: str, timeout: int = 120, user: str = "agent", workdir: str = "/work"
     ) -> tuple[int, str]:
         """Run a bash command in the attacker container, return (rc, output)."""
+
+        def attacker_available() -> bool:
+            try:
+                probe = subprocess.run(
+                    ["docker", "exec", self.attacker, "true"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise EnvError("Docker exec probe timed out") from exc
+            return probe.returncode == 0
+
         try:
             proc = subprocess.run(
                 ["docker", "exec", "-u", user, "-w", workdir, self.attacker, "bash", "-lc", cmd],
@@ -200,31 +214,27 @@ class TaskEnv:
                 timeout=timeout,
             )
             stderr = (proc.stderr or "").lstrip()
-            if proc.returncode != 0 and stderr.startswith(
-                (
-                    "Cannot connect to the Docker daemon",
-                    "error during connect:",
-                    "Error response from daemon:",
-                )
-            ):
-                # docker exec forwards the command's stderr. Probe Docker itself
-                # before treating a matching message as an environment failure.
-                try:
-                    probe = subprocess.run(
-                        ["docker", "exec", self.attacker, "true"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
+            # docker exec forwards command stderr, so confirm a matching
+            # message is from Docker before invalidating the attempt.
+            if (
+                proc.returncode != 0
+                and stderr.startswith(
+                    (
+                        "Cannot connect to the Docker daemon",
+                        "error during connect:",
+                        "Error response from daemon:",
                     )
-                except subprocess.TimeoutExpired as exc:
-                    raise EnvError("Docker exec probe timed out") from exc
-                if probe.returncode != 0:
-                    raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
+                )
+                and not attacker_available()
+            ):
+                raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""
             )
             return proc.returncode, out
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            if not attacker_available():
+                raise EnvError("Docker exec unavailable after attacker command timeout") from exc
             return 124, f"[command timed out after {timeout}s]"
 
     def read_flag(self, stage: Stage) -> str:
