@@ -116,6 +116,7 @@ class TaskEnv:
             "-f",
             str(self.task.dir / self.task.compose),
         ]
+        self._verify_compose_config(compose)
         _run(compose + (["up", "-d", "--build"] if build else ["up", "-d"]), timeout=1800)
         if self.task.ready_service:
             deadline = time.time() + 180
@@ -185,6 +186,41 @@ class TaskEnv:
             check=False,
             timeout=120,
         )
+
+    def _verify_compose_config(self, compose: list[str]) -> None:
+        """Reject network escapes before Compose creates any container or network."""
+        rendered = _run(compose + ["config", "--format", "json"], timeout=60).stdout
+        try:
+            config = json.loads(rendered)
+        except json.JSONDecodeError as exc:
+            raise EnvError(f"{self.task.id}: invalid Compose config JSON") from exc
+        if not isinstance(config, dict):
+            raise EnvError(f"{self.task.id}: invalid Compose config")
+        networks = config.get("networks")
+        services = config.get("services")
+        if not isinstance(networks, dict) or not networks:
+            raise EnvError(f"{self.task.id}: Compose config has no declared networks")
+        if not isinstance(services, dict) or not services:
+            raise EnvError(f"{self.task.id}: Compose config has no services")
+        for name, network in networks.items():
+            if not isinstance(network, dict) or network.get("internal") is not True:
+                raise EnvError(f"{self.task.id}: network {name} allows external access")
+            if network.get("external"):
+                raise EnvError(f"{self.task.id}: network {name} is external")
+            if network.get("name", f"{self.project}_{name}") != f"{self.project}_{name}":
+                raise EnvError(f"{self.task.id}: network {name} is not project-scoped")
+        for name, service in services.items():
+            if not isinstance(service, dict):
+                raise EnvError(f"{self.task.id}: invalid service {name}")
+            if service.get("network_mode"):
+                raise EnvError(f"{self.task.id}: service {name} bypasses Compose networks")
+            attached = service.get("networks")
+            if not isinstance(attached, dict) or not attached:
+                raise EnvError(f"{self.task.id}: service {name} has no isolated network")
+            if not set(attached).issubset(networks):
+                raise EnvError(f"{self.task.id}: service {name} uses an undeclared network")
+        if not set(self.task.attacker_networks).issubset(networks):
+            raise EnvError(f"{self.task.id}: attacker network is not declared by Compose")
 
     def verify_isolation(self, attacker_networks: list[str]) -> None:
         """Reject Compose networks that would let a model reach outside the lab."""
