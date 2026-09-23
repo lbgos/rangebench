@@ -305,7 +305,12 @@ def run_attempt(
                         }
                     )
                 cmd = commands[0]
-                rc, out = env.exec(cmd, timeout=task.cmd_timeout)
+                try:
+                    rc, out = env.exec(cmd, timeout=task.cmd_timeout)
+                except EnvError as exc:
+                    res.end_reason = f"env: {exc}"
+                    emit("fatal", reason=res.end_reason)
+                    break
                 res.commands += 1
                 obs = truncate_output(out)
                 emit("exec", cmd=cmd[:2000], rc=rc, out=obs[:8000])

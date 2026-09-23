@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from rangebench.agent import Usage
 from rangebench.cli import _get_task_set_hash
-from rangebench.env import EnvError, _run
+from rangebench.env import EnvError, Task, TaskEnv, _run
 
 
 class AccountingTests(unittest.TestCase):
@@ -39,6 +39,17 @@ class AccountingTests(unittest.TestCase):
         with patch("rangebench.env.subprocess.run", side_effect=subprocess.TimeoutExpired("docker", 1)):
             with self.assertRaisesRegex(EnvError, "timed out after 1s"):
                 _run(["docker", "compose", "up"], timeout=1)
+
+    def test_docker_daemon_outage_is_not_a_model_command_failure(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        exec_failure = subprocess.CompletedProcess(
+            [], 1, "", "Cannot connect to the Docker daemon"
+        )
+        probe_failure = subprocess.CompletedProcess([], 1, "", "daemon unavailable")
+        with patch("rangebench.env.subprocess.run", side_effect=[exec_failure, probe_failure]):
+            with self.assertRaisesRegex(EnvError, "Docker daemon unavailable"):
+                env.exec("echo ok")
 
 
 if __name__ == "__main__":

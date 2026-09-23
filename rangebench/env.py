@@ -199,6 +199,24 @@ class TaskEnv:
                 text=True,
                 timeout=timeout,
             )
+            if proc.returncode != 0 and (proc.stderr or "").lstrip().startswith(
+                (
+                    "Cannot connect to the Docker daemon",
+                    "error during connect:",
+                    "Error response from daemon:",
+                )
+            ):
+                try:
+                    probe = subprocess.run(
+                        ["docker", "info", "--format", "{{.ServerVersion}}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise EnvError("Docker daemon unavailable during attacker command") from exc
+                if probe.returncode != 0:
+                    raise EnvError("Docker daemon unavailable during attacker command")
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""
             )
