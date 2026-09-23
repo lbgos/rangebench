@@ -313,6 +313,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         print(
             f"{t['task']:20} {str(t['solved']):6} {t['turns_used']}/{t['turns_budget']:<6} {out_tok:<10} {t['wall_s']:<8} {t['end_reason']}"
         )
+    if invalid:
+        raise SystemExit(1)
 
 
 def cmd_probe(args: argparse.Namespace) -> None:

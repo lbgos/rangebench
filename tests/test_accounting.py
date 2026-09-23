@@ -1,3 +1,5 @@
+import argparse
+import json
 import tempfile
 import subprocess
 import unittest
@@ -5,8 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rangebench.agent import Usage
-from rangebench.cli import _get_task_set_hash
-from rangebench.env import EnvError, Task, TaskEnv, _run
+from rangebench.cli import _get_task_set_hash, cmd_run
+from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
+from rangebench.runner import AttemptResult
 
 
 class AccountingTests(unittest.TestCase):
@@ -50,6 +53,28 @@ class AccountingTests(unittest.TestCase):
         with patch("rangebench.env.subprocess.run", side_effect=[exec_failure, probe_failure]):
             with self.assertRaisesRegex(EnvError, "Docker daemon unavailable"):
                 env.exec("echo ok")
+
+    def test_invalid_trial_exits_nonzero_after_writing_artifacts(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "web")])
+        args = argparse.Namespace(
+            trials=1, ctx_window=128000, reserve=12000, keep_tail=12, threshold=0.82,
+            tasks=[task.id], base_url="http://localhost:8000/v1", provider="openai",
+            model="test", compact="deterministic", keep=False,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("rangebench.cli.RESULTS", Path(tmp)),
+                patch("rangebench.cli.load_task", return_value=task),
+                patch("rangebench.cli.ChatClient"),
+                patch("rangebench.cli.run_attempt", return_value=AttemptResult(task.id, 1, end_reason="llm error")),
+                patch("rangebench.cli._get_attacker_digest", return_value="sha256:test"),
+            ):
+                with self.assertRaises(SystemExit) as caught:
+                    cmd_run(args)
+            self.assertEqual(caught.exception.code, 1)
+            self.assertEqual(json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]["scored"], False)
+            manifest = next(Path(tmp).glob("*/manifest.json"))
+            self.assertEqual(json.loads(manifest.read_text())["status"], "completed_with_errors")
 
 
 if __name__ == "__main__":

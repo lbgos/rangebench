@@ -62,7 +62,7 @@ Live results at [lbgos.dev/bench](https://lbgos.dev/bench).
 
 ## reproducibility
 
-Pin these for a comparable run: task source, harness source, and attacker image ID. `run` writes their fingerprints to `manifest.json`. A failed environment or model API call marks the trial invalid; it is excluded from the score. `completion_tokens` includes reasoning tokens, which are also reported as a breakdown. Compare only within one bench version.
+Pin these for a comparable run: task source, harness source, and attacker image ID. `run` writes their fingerprints to `manifest.json`. A failed environment or model API call marks the trial invalid, excludes it from the score, and makes the command exit nonzero after writing artifacts. `completion_tokens` includes reasoning tokens, which are also reported as a breakdown. Compare only within one bench version.
 
 ## notes
 
