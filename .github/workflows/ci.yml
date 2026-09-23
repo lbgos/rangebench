@@ -16,3 +16,4 @@ jobs:
       - run: ruff format --check rangebench
       - run: mypy rangebench
       - run: python3 -m py_compile rangebench/*.py
+      - run: python3 -m unittest discover -s tests

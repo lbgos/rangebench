@@ -234,6 +234,7 @@ def run_attempt(
             res.reasoning_tokens += usage.reasoning_tokens
             if err:
                 emit("llm-error", error=err)
+                res.end_reason = "llm error"
                 break
             if not content.strip():
                 empty_streak += 1
@@ -323,6 +324,8 @@ def run_attempt(
             res.end_reason = res.end_reason or "turn budget"
     finally:
         res.wall_s = round(time.time() - t0, 1)
+        if keep:
+            emit("keep", project=project, warning="teardown skipped due to --keep")
         emit(
             "end",
             reason=res.end_reason,
@@ -355,7 +358,6 @@ def run_attempt(
                 except Exception:
                     pass
         else:
-            emit("keep", project=project, warning="teardown skipped due to --keep")
             print(f"[keep] project {project} left for debugging", flush=True)
         if verbose:
             print(
@@ -389,11 +391,13 @@ def run_oracle(task: Task, project: str = "rb-oracle") -> AttemptResult:
             raise EnvError(f"docker cp solve.sh: {_r.stderr[-300:]}")
         for dep in sorted((task.dir / "solution").glob("*")):
             if dep.name != "solve.sh":
-                __import__("subprocess").run(
+                copied = __import__("subprocess").run(
                     ["docker", "cp", str(dep), f"{env.attacker}:/oracle/{dep.name}"],
                     capture_output=True,
                     text=True,
                 )
+                if copied.returncode != 0:
+                    raise EnvError(f"docker cp {dep.name}: {copied.stderr[-300:]}")
         rc, out = env.exec(
             "bash /oracle/solve.sh",
             timeout=max(task.cmd_timeout, 600),
@@ -406,6 +410,7 @@ def run_oracle(task: Task, project: str = "rb-oracle") -> AttemptResult:
         print(f"[oracle {task.id}] rc={rc} stages_verified={found}", flush=True)
         if rc != 0 or len(res.solved) != len(task.stages):
             print(out[-3000:], flush=True)
+            raise EnvError(f"{task.id}: oracle failed ({res.end_reason}, stages_verified={found})")
     finally:
         ok, warn = env.down()
         if warn:
