@@ -2,9 +2,9 @@
 """Oracle: tcache poisoning with glibc-2.39 pointer mangling.
 Protocol is digit-menu. free(c0)+show leaks fd0 = pos0>>12 (next=NULL);
 free(c1)+show leaks fd1 = (pos1>>12) ^ pos0 with pos1>>12 == fd0 (adjacent,
-same page) -> pos0 = fd1 ^ fd0. UAF-edit c1's fd to mangled(&g_dispatch-0x10)
+same page) -> pos0 = fd1 ^ fd0. UAF-edit c1's fd to mangled(&g_box)
 = (pos>>12) ^ target; two adds pop c1 then the fake chunk, second add writes
-dispatch_win over g_dispatch; menu 5 calls it."""
+dispatch_win over g_box.f; menu 5 calls it."""
 
 from pwn import ELF, context, p64, remote, u64
 

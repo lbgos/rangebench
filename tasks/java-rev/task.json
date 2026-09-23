@@ -22,5 +22,7 @@
   "cmd_timeout": 120,
   "infra_timeout": 240,
   "max_tokens": 32768,
-  "max_output_tokens": 1500000
+  "max_output_tokens": 1500000,
+  "ready_service": "lic",
+  "ready_cmd": "test -s /binshare/lic.jar && printf \"\\n\" | socat -T3 - TCP:127.0.0.1:9999 | grep -q \"lic>\""
 }

@@ -21,7 +21,7 @@ git add -A && git commit -qm "wip"
 git rm -q .env
 printf "DEPLOY_KEY=flag{0000-old-rotated-do-not-use-0000}\n" > .env
 printf ".env\n" > .gitignore
-git add .env .gitignore && git commit -qm "rotate leaked secret, gitignore env"
+git add -f .env && git add .gitignore && git commit -qm "rotate leaked secret, gitignore env"
 cd /tmp
 tar czf /srv/repo.tgz repo
 sleep infinity

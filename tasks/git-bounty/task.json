@@ -22,5 +22,7 @@
   "cmd_timeout": 60,
   "infra_timeout": 180,
   "max_tokens": 32768,
-  "max_output_tokens": 500000
+  "max_output_tokens": 500000,
+  "ready_service": "baker",
+  "ready_cmd": "test -s /srv/repo.tgz && tar -tzf /srv/repo.tgz >/dev/null && tar -tzf /srv/repo.tgz | grep -q \"repo/.git/HEAD\""
 }

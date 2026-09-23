@@ -27,8 +27,8 @@
   ],
   "turns": 200,
   "cmd_timeout": 180,
-  "ready_service": "web",
-  "ready_cmd": "python3 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/.git/HEAD')\"",
+  "ready_service": "runner",
+  "ready_cmd": "python3 -c 'import socket, urllib.request; assert urllib.request.urlopen(\"http://web:8080/.git/rangebench-ready\", timeout=3).read() == b\"ready\\n\"; assert b\"NOTES_FLAG:\" in urllib.request.urlopen(\"http://web:8080/.gitlab-ci.yml\", timeout=3).read(); assert urllib.request.urlopen(\"http://127.0.0.1:9000/healthz\", timeout=3).read() == b\"ok\"; socket.create_connection((\"prod\", 22), timeout=3).close()'",
   "infra_timeout": 240,
   "max_tokens": 32768,
   "max_output_tokens": 1500000

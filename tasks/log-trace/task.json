@@ -22,5 +22,7 @@
   "cmd_timeout": 120,
   "infra_timeout": 180,
   "max_tokens": 32768,
-  "max_output_tokens": 500000
+  "max_output_tokens": 500000,
+  "ready_service": "baker",
+  "ready_cmd": "test -s /srv/auth.log && test -s /srv/syslog && grep -q \"Accepted password for\" /srv/auth.log && grep -q \"sudo-command:\" /srv/syslog"
 }

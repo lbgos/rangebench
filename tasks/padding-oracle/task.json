@@ -19,5 +19,7 @@
   "cmd_timeout": 300,
   "infra_timeout": 240,
   "max_tokens": 32768,
-  "max_output_tokens": 1500000
+  "max_output_tokens": 1500000,
+  "ready_service": "vault",
+  "ready_cmd": "python3 -c 'import json, urllib.request; x=json.load(urllib.request.urlopen(\"http://127.0.0.1:8080/\", timeout=3)); assert len(bytes.fromhex(x[\"iv\"])) == 16 and len(bytes.fromhex(x[\"ct\"])) >= 16 and len(bytes.fromhex(x[\"ct\"])) % 16 == 0'"
 }
