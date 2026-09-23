@@ -29,7 +29,6 @@ History compaction happens near the context window. The harness keeps the last 1
 You need Docker with the compose plugin and Python 3.11 or newer.
 
 ```bash
-docker build -t rb-attacker:latest attacker/
 python3 -m rangebench preflight
 python3 -m rangebench list
 python3 -m rangebench check net-recon jwt-none
@@ -56,7 +55,7 @@ For a remote host set `REMOTE=user@host REMOTE_DIR=~/rangebench`.
 
 ## reports
 
-`results/<runid>/` has a jsonl transcript per attempt and a `*.json` summary. `run` prints a per-task table after it finishes, plus per-category and per-tier counts. With `--trials 2` or more it adds a Wilson interval. Tokens and wall time are in the table.
+`results/<runid>/` has a jsonl transcript per attempt and a manifest. The summary is `results/<runid>.json`. `run` prints a per-task table after it finishes, plus per-category and per-tier counts. With `--trials 2` or more it adds a Wilson interval. Tokens and wall time are in the table.
 
 Live results at [lbgos.dev/bench](https://lbgos.dev/bench).
 

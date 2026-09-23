@@ -40,7 +40,9 @@ def _wilson(p: float, n: int, z: float = 1.96) -> tuple[float, float]:
 def _get_git_commit() -> str | None:
     for cmd in (["git", "rev-parse", "HEAD"], ["git", "rev-parse", "--short", "HEAD"]):
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            out = subprocess.run(
+                cmd, cwd=TASKS_DIR.parent, capture_output=True, text=True, timeout=5
+            )
             if out.returncode == 0 and out.stdout.strip():
                 return out.stdout.strip().splitlines()[0][:40]
         except Exception:
@@ -106,7 +108,7 @@ def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None
         "finished": doc.get("finished"),
         "harness_commit": _get_git_commit(),
         "harness_source_hash": _get_harness_hash(),
-        "attacker_digest": _get_attacker_digest(),
+        "attacker_digest": doc.get("attacker_digest"),
         "task_set_hash": _get_task_set_hash(),
         "task_count": len(doc.get("tasks", [])),
         "output_tokens_include_reasoning": True,
@@ -172,6 +174,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     )
     if not args.base_url and "OPENAI_BASE_URL" not in os.environ:
         print(f"[warn] OPENAI_BASE_URL not set, using default {base}", flush=True)
+    attacker_digest = _get_attacker_digest()
+    if not attacker_digest:
+        raise SystemExit("rb-attacker image ID unavailable; run preflight first")
     # provider switch
     provider = getattr(args, "provider", "openai")
     client: ChatClientProtocol
@@ -196,6 +201,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         "model": args.model,
         "base_url": base,
         "provider": provider,
+        "attacker_digest": attacker_digest,
         "ctx_window": args.ctx_window,
         "reserve": args.reserve,
         "keep_tail": args.keep_tail,
@@ -342,32 +348,31 @@ def cmd_preflight(_args: argparse.Namespace) -> None:
     if shutil.which("docker") is None:
         print("docker not found", flush=True)
         raise SystemExit(1)
-    subprocess.run(["docker", "version"], check=False)
+    subprocess.run(["docker", "version"], check=True)
     res = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)
     if res.returncode != 0:
         print("docker compose not found, need docker compose plugin", flush=True)
         raise SystemExit(1)
     print(res.stdout.strip())
-    res = subprocess.run(
-        ["docker", "images", "rb-attacker:latest", "--format", "{{.Repository}}"],
-        capture_output=True,
-        text=True,
+    root = TASKS_DIR.parent
+    print("[preflight] building rb-attacker from current source...", flush=True)
+    subprocess.run(
+        ["docker", "build", "-t", "rb-attacker:latest", str(root / "attacker")],
+        check=True,
     )
-    if "rb-attacker" not in res.stdout:
-        print("[preflight] rb-attacker image not found, building...", flush=True)
-        subprocess.run(["docker", "build", "-t", "rb-attacker:latest", "attacker"], check=False)
-    else:
-        d = _get_attacker_digest()
-        if d:
-            print(f"attacker digest: {d}")
-    tasks_dir = Path(__file__).resolve().parent.parent / "tasks"
-    for task_dir in sorted(tasks_dir.iterdir()):
+    digest = _get_attacker_digest()
+    if not digest:
+        raise SystemExit("rb-attacker image ID unavailable after build")
+    print(f"attacker digest: {digest}")
+    for task_dir in sorted(TASKS_DIR.iterdir()):
         compose = task_dir / "docker-compose.yml"
         if not compose.exists():
             continue
         print(f"[preflight] pulling {task_dir.name} ...", flush=True)
         subprocess.run(
-            ["docker", "compose", "-f", str(compose), "pull", "--quiet"], check=False, timeout=600
+            ["docker", "compose", "-f", str(compose), "pull", "--ignore-buildable", "--quiet"],
+            check=True,
+            timeout=600,
         )
     print(f"task set hash: {_get_task_set_hash()}")
     commit = _get_git_commit()

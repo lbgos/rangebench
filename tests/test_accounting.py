@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rangebench.agent import Usage
-from rangebench.cli import _get_task_set_hash, cmd_run
+from rangebench.cli import _get_git_commit, _get_task_set_hash, cmd_preflight, cmd_run
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
 from rangebench.runner import AttemptResult
 
@@ -75,6 +75,27 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]["scored"], False)
             manifest = next(Path(tmp).glob("*/manifest.json"))
             self.assertEqual(json.loads(manifest.read_text())["status"], "completed_with_errors")
+
+    def test_preflight_stops_if_attacker_build_fails(self) -> None:
+        with (
+            patch("shutil.which", return_value="/usr/bin/docker"),
+            patch("rangebench.cli.subprocess.run") as run,
+        ):
+            run.side_effect = [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "Docker Compose version 2", ""),
+                subprocess.CalledProcessError(1, "docker build"),
+            ]
+            with self.assertRaises(subprocess.CalledProcessError):
+                cmd_preflight(argparse.Namespace())
+            self.assertEqual(run.call_count, 3)
+            self.assertIn("attacker", str(run.call_args.args[0]))
+
+    def test_git_commit_is_read_from_benchmark_checkout(self) -> None:
+        with patch("rangebench.cli.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, "deadbeef\n", "")
+            self.assertEqual(_get_git_commit(), "deadbeef")
+            self.assertEqual(run.call_args.kwargs["cwd"], Path(__file__).resolve().parents[1])
 
 
 if __name__ == "__main__":
