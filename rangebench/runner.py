@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +25,8 @@ Do not propose new actions. Use plain text, at most 1500 tokens."""
 
 STAGE_FACTS_START = "[CONFIRMED STAGE FACTS]"
 STAGE_FACTS_END = "[END CONFIRMED STAGE FACTS]"
+SUBMISSION_START = "[CONFIRMED SUBMISSION]"
+SUBMISSION_END = "[END CONFIRMED SUBMISSION]"
 
 # All models compact before this ceiling; smaller model windows trigger earlier.
 MAX_CTX_WINDOW = 258000
@@ -150,16 +151,68 @@ def _confirmed_stage_facts(messages: list[dict]) -> list[dict[str, str]]:
                 pass
         if message.get("role") != "user":
             continue
-        match = re.match(r"Correct, stage '([^']+)' captured\.", content)
-        if not match:
-            continue
-        fact = {"stage": match.group(1), "feedback": content}
-        if i and messages[i - 1].get("role") == "assistant":
-            _, answers = parse_turn(messages[i - 1].get("content") or "")
-            if len(answers) == 1:
-                fact["flag"] = answers[0]
-        facts[fact["stage"]] = fact
+        if content.startswith("Correct, stage '") and SUBMISSION_START in content:
+            payload = content.split(SUBMISSION_START, 1)[1].split(SUBMISSION_END, 1)[0]
+            try:
+                fact = json.loads(payload.strip())
+                if isinstance(fact, dict) and all(
+                    isinstance(fact.get(key), str) for key in ("stage", "flag", "feedback")
+                ):
+                    facts[fact["stage"]] = fact
+            except (ValueError, TypeError):
+                pass
     return list(facts.values())
+
+
+def _scored_feedback(stage: str, flag: str, remaining: list[str]) -> str:
+    feedback = f"Correct, stage '{stage}' captured."
+    feedback += (
+        " Task fully solved, stop."
+        if not remaining
+        else f" Stages remaining: {remaining}. Continue."
+    )
+    fact = {"stage": stage, "flag": flag.strip(), "feedback": feedback}
+    return (
+        feedback
+        + f"\n{SUBMISSION_START}\n"
+        + json.dumps(fact, ensure_ascii=False)
+        + f"\n{SUBMISSION_END}"
+    )
+
+
+def _next_transcript_chunk(
+    messages: list[dict], index: int, offset: int, budget: int
+) -> tuple[str, int, int]:
+    """Pack whole messages; split only one message that cannot fit by itself."""
+    parts: list[str] = []
+    remaining = budget
+    while index < len(messages):
+        content = messages[index].get("content") or ""
+        label = (
+            f"{messages[index]['role'].upper()} #{index}: "
+            if offset == 0
+            else f"{messages[index]['role'].upper()} #{index} [continued at char {offset}]: "
+        )
+        separator = "\n\n" if parts else ""
+        needed = len(separator) + len(label) + len(content) - offset
+        if needed <= remaining:
+            parts.append(separator + label + content[offset:])
+            remaining -= needed
+            index += 1
+            offset = 0
+            continue
+        if parts:
+            break
+        allowance = remaining - len(label)
+        if allowance <= 0:
+            break
+        parts.append(label + content[offset : offset + allowance])
+        offset += allowance
+        if offset >= len(content):
+            index += 1
+            offset = 0
+        break
+    return "".join(parts), index, offset
 
 
 def _facts_block(messages: list[dict]) -> str:
@@ -240,20 +293,19 @@ def _compact_history_llm(
             Usage(),
             "compaction prompt exceeds context window",
         )
-    transcript = "\n\n".join(
-        f"{message['role'].upper()} #{i}: {message.get('content') or ''}"
-        for i, message in enumerate(middle)
-    )
     total_usage = Usage()
     summary = ""
     offset = 0
+    index = 0
     try:
-        while offset < len(transcript):
+        while index < len(middle):
             memory = f"Memory from earlier chunks:\n{summary}\n\n" if summary else ""
             chunk_chars = input_chars - len(memory) - 40
             if chunk_chars < 128:
                 raise RuntimeError("prior summary exceeds compaction context window")
-            chunk = transcript[offset : offset + chunk_chars]
+            chunk, index, offset = _next_transcript_chunk(middle, index, offset, chunk_chars)
+            if not chunk:
+                raise RuntimeError("message header exceeds compaction context window")
             comp_messages = [
                 {"role": "system", "content": COMPACTION_SYSTEM},
                 {"role": "user", "content": prefix + memory + "Transcript chunk:\n" + chunk},
@@ -265,7 +317,6 @@ def _compact_history_llm(
             if err or not next_summary.strip():
                 raise RuntimeError(err or "empty summary")
             summary = _excerpt(next_summary.strip(), narrative_chars)
-            offset += len(chunk)
         summary_msg = {
             "role": "user",
             "content": (
@@ -520,12 +571,7 @@ def run_attempt(
                     messages.append(
                         {
                             "role": "user",
-                            "content": f"Correct, stage '{hit.name}' captured."
-                            + (
-                                " Task fully solved, stop."
-                                if not pending
-                                else f" Stages remaining: {[s.name for s in pending]}. Continue."
-                            ),
+                            "content": _scored_feedback(hit.name, flag, [s.name for s in pending]),
                         }
                     )
                     if not pending:

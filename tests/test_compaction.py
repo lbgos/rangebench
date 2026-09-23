@@ -16,7 +16,9 @@ from rangebench.runner import (
     _deterministic_trim,
     _estimate_tokens,
     _maybe_compact,
+    _next_transcript_chunk,
     _request_max_tokens,
+    _scored_feedback,
     _split_history,
     run_attempt,
 )
@@ -251,6 +253,31 @@ class CompactionTests(unittest.TestCase):
         for call, limit in zip(client.calls, client.limits):
             self.assertLess(_estimate_tokens(call) * 2 + limit, 8000)
 
+    def test_transcript_chunks_keep_message_boundaries(self) -> None:
+        messages = [
+            {"role": "assistant", "content": "A" * 70},
+            {"role": "user", "content": "B" * 70},
+        ]
+        first, index, offset = _next_transcript_chunk(messages, 0, 0, 100)
+        self.assertEqual(first, "ASSISTANT #0: " + "A" * 70)
+        self.assertEqual((index, offset), (1, 0))
+        second, index, offset = _next_transcript_chunk(messages, index, offset, 100)
+        self.assertEqual(second, "USER #1: " + "B" * 70)
+        self.assertEqual((index, offset), (2, 0))
+
+    def test_oversized_message_has_explicit_continuation(self) -> None:
+        messages = [{"role": "user", "content": "0123456789" * 30}]
+        chunks: list[str] = []
+        index = offset = 0
+        while index < len(messages):
+            chunk, index, offset = _next_transcript_chunk(messages, index, offset, 100)
+            chunks.append(chunk)
+        self.assertTrue(chunks[0].startswith("USER #0: "))
+        self.assertTrue(all("[continued at char " in chunk for chunk in chunks[1:]))
+        self.assertEqual(
+            "".join(chunk.split(": ", 1)[1] for chunk in chunks), messages[0]["content"]
+        )
+
     def test_run_attempt_passes_context_capped_generation_limit(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str) -> None:
@@ -320,7 +347,7 @@ class CompactionTests(unittest.TestCase):
                 {"role": "assistant", "content": "ANSWER: flag{web_exact}"},
                 {
                     "role": "user",
-                    "content": "Correct, stage 'web' captured. Stages remaining: ['root']. Continue.",
+                    "content": _scored_feedback("web", "flag{web_exact}", ["root"]),
                 },
                 {"role": "assistant", "content": "COMMAND:\nprobe"},
                 {"role": "user", "content": "OBSERVATION: keep looking"},
@@ -393,6 +420,61 @@ class CompactionTests(unittest.TestCase):
             result = run_attempt(client, task, 1, "test", Path(directory), verbose=False)
         self.assertEqual(client.limits, [25, 5])
         self.assertEqual(result.completion_tokens, 25)
+
+    def test_scoring_records_multiple_flags_beyond_truncated_answer(self) -> None:
+        class FakeEnv:
+            def __init__(self, task: object, project: str) -> None:
+                pass
+
+            def up(self) -> None:
+                pass
+
+            def down(self) -> tuple[bool, None]:
+                return True, None
+
+            def read_flag(self, stage: object) -> str:
+                return f"flag{{{stage.name}}}"
+
+            def exec(self, command: str, timeout: int) -> None:
+                raise AssertionError("No command expected")
+
+        class MultiAnswerClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                if len(self.calls) == 1:
+                    return (
+                        "x" * 4100 + "\nANSWER: flag{web}\nANSWER: flag{root}",
+                        Usage(prompt_tokens=100, completion_tokens=30),
+                        None,
+                    )
+                return "no command", Usage(prompt_tokens=100, completion_tokens=3), None
+
+        task = SimpleNamespace(
+            id="multi-answer",
+            statement="Capture three flags",
+            stages=[SimpleNamespace(name=name) for name in ("web", "root", "final")],
+            turns=2,
+            infra_timeout=5,
+            max_tokens=32768,
+            max_output_tokens=1000,
+            canary="",
+        )
+        client = MultiAnswerClient()
+        with TemporaryDirectory() as directory, patch("rangebench.runner.TaskEnv", FakeEnv):
+            result = run_attempt(client, task, 1, "test", Path(directory), verbose=False)
+        self.assertEqual(result.solved, ["web", "root"])
+        self.assertEqual(result.commands, 0)
+        facts = _confirmed_stage_facts(client.calls[1])
+        self.assertEqual(
+            [(fact["stage"], fact["flag"]) for fact in facts],
+            [("web", "flag{web}"), ("root", "flag{root}")],
+        )
+        self.assertNotIn(
+            "ANSWER:",
+            "".join(m["content"] for m in client.calls[1][2:] if m["role"] == "assistant"),
+        )
 
     def test_context_error_retries_same_turn_without_executing_command(self) -> None:
         class FakeEnv:
