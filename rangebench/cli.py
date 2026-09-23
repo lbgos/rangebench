@@ -237,7 +237,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "solved": sorted(res.solved) == sorted(s.name for s in task.stages),
                     "scored": not (
                         res.end_reason.startswith("env:")
-                        or res.end_reason in {"infra timeout", "llm error"}
+                        or res.end_reason
+                        in {"infra timeout", "llm error", "context window exhausted"}
                     ),
                     "wrong": res.wrong,
                     "turns_used": res.turns_used,
