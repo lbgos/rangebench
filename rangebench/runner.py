@@ -126,7 +126,8 @@ def _excerpt(content: str, limit: int) -> str:
 def _confirmed_stage_facts(messages: list[dict]) -> list[dict[str, str]]:
     """Carry scored stage feedback outside the lossy model-written summary."""
     facts: dict[str, dict[str, str]] = {}
-    for i, message in enumerate(messages):
+    for i in range(2, len(messages)):
+        message = messages[i]
         content = message.get("content") or ""
         if (
             message.get("role") == "user"
