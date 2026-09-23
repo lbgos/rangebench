@@ -192,7 +192,12 @@ class TaskEnv:
     def exec(
         self, cmd: str, timeout: int = 120, user: str = "agent", workdir: str = "/work"
     ) -> tuple[int, str]:
-        """Run a bash command in the attacker container, return (rc, output)."""
+        """Run a bash command in the attacker container, return (rc, output).
+
+        GNU timeout stops the command process group. Commands that deliberately
+        detach into a new session can outlive it; an outer timeout invalidates
+        the attempt if Docker still has not returned.
+        """
 
         def attacker_available() -> bool:
             try:
@@ -208,10 +213,24 @@ class TaskEnv:
 
         try:
             proc = subprocess.run(
-                ["docker", "exec", "-u", user, "-w", workdir, self.attacker, "bash", "-lc", cmd],
+                [
+                    "docker",
+                    "exec",
+                    "-u",
+                    user,
+                    "-w",
+                    workdir,
+                    self.attacker,
+                    "timeout",
+                    "--kill-after=5s",
+                    str(timeout),
+                    "bash",
+                    "-lc",
+                    cmd,
+                ],
                 capture_output=True,
                 text=True,
-                timeout=timeout,
+                timeout=timeout + 15,
             )
             stderr = (proc.stderr or "").lstrip()
             # docker exec forwards command stderr, so confirm a matching
@@ -228,6 +247,8 @@ class TaskEnv:
                 and not attacker_available()
             ):
                 raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
+            if proc.returncode == 124:
+                return 124, f"[command timed out after {timeout}s]"
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""
             )
@@ -235,7 +256,7 @@ class TaskEnv:
         except subprocess.TimeoutExpired as exc:
             if not attacker_available():
                 raise EnvError("Docker exec unavailable after attacker command timeout") from exc
-            return 124, f"[command timed out after {timeout}s]"
+            raise EnvError("Docker exec did not finish after attacker command timeout") from exc
 
     def read_flag(self, stage: Stage) -> str:
         compose = [

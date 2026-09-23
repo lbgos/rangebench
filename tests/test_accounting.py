@@ -66,7 +66,9 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual((usage.input_tokens, usage.output_tokens), (320, 30))
         self.assertEqual((usage.cache_read_tokens, usage.cache_write_tokens), (200, 100))
-        self.assertEqual((usage.cache_read_reported_calls, usage.cache_write_reported_calls), (1, 1))
+        self.assertEqual(
+            (usage.cache_read_reported_calls, usage.cache_write_reported_calls), (1, 1)
+        )
 
     def test_compaction_usage_is_separate_and_in_total(self) -> None:
         class Compactor:
@@ -166,17 +168,21 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual(docker_run[-3:], ["sha256:recorded", "sleep", "infinity"])
 
-    def test_attacker_command_timeout_is_scored_when_docker_is_healthy(self) -> None:
+    def test_attacker_command_timeout_is_enforced_inside_container(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test")
-        healthy_probe = subprocess.CompletedProcess([], 0, "", "")
+        timed_out_command = subprocess.CompletedProcess([], 124, "", "")
         with patch(
             "rangebench.env.subprocess.run",
-            side_effect=[subprocess.TimeoutExpired("docker exec", 1), healthy_probe],
+            return_value=timed_out_command,
         ) as run:
             rc, out = env.exec("sleep 10", timeout=1)
         self.assertEqual((rc, out), (124, "[command timed out after 1s]"))
-        self.assertEqual(run.call_args.args[0], ["docker", "exec", "rb-test-atk", "true"])
+        self.assertEqual(
+            run.call_args.args[0][-6:],
+            ["timeout", "--kill-after=5s", "1", "bash", "-lc", "sleep 10"],
+        )
+        self.assertEqual(run.call_args.kwargs["timeout"], 16)
 
     def test_docker_timeout_is_not_scored_when_attacker_is_unavailable(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
@@ -187,6 +193,17 @@ class AccountingTests(unittest.TestCase):
             side_effect=[subprocess.TimeoutExpired("docker exec", 1), failed_probe],
         ):
             with self.assertRaisesRegex(EnvError, "Docker exec unavailable"):
+                env.exec("sleep 10", timeout=1)
+
+    def test_outer_timeout_is_invalid_even_when_attacker_responds(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        healthy_probe = subprocess.CompletedProcess([], 0, "", "")
+        with patch(
+            "rangebench.env.subprocess.run",
+            side_effect=[subprocess.TimeoutExpired("docker exec", 16), healthy_probe],
+        ):
+            with self.assertRaisesRegex(EnvError, "did not finish"):
                 env.exec("sleep 10", timeout=1)
 
     def test_invalid_trial_exits_nonzero_after_writing_artifacts(self) -> None:
@@ -215,7 +232,11 @@ class AccountingTests(unittest.TestCase):
             }
         )
         result.compaction_usage.add(
-            {"prompt_tokens": 20, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 0}}
+            {
+                "prompt_tokens": 20,
+                "completion_tokens": 5,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            }
         )
         result.prompt_tokens = 100
         result.completion_tokens = 40
