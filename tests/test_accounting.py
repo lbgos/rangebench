@@ -171,7 +171,9 @@ class AccountingTests(unittest.TestCase):
     def test_attacker_command_timeout_is_enforced_inside_container(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test")
-        timed_out_command = subprocess.CompletedProcess([], 124, "", "")
+        timed_out_command = subprocess.CompletedProcess(
+            [], 124, "", "timeout: sending signal TERM to command ‘bash’"
+        )
         with patch(
             "rangebench.env.subprocess.run",
             return_value=timed_out_command,
@@ -179,10 +181,36 @@ class AccountingTests(unittest.TestCase):
             rc, out = env.exec("sleep 10", timeout=1)
         self.assertEqual((rc, out), (124, "[command timed out after 1s]"))
         self.assertEqual(
-            run.call_args.args[0][-6:],
-            ["timeout", "--kill-after=5s", "1", "bash", "-lc", "sleep 10"],
+            run.call_args.args[0][-9:],
+            [
+                "timeout",
+                "--verbose",
+                "--kill-after=5s",
+                "1",
+                "bash",
+                "-lc",
+                'exec 2>&1; exec bash -lc "$1"',
+                "_",
+                "sleep 10",
+            ],
         )
         self.assertEqual(run.call_args.kwargs["timeout"], 16)
+
+    def test_command_exit_124_keeps_its_output(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        command = subprocess.CompletedProcess([], 124, "result", "")
+        with patch("rangebench.env.subprocess.run", return_value=command):
+            self.assertEqual(env.exec("printf result; exit 124"), (124, "result"))
+
+    def test_kill_escalation_is_reported_as_command_timeout(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        command = subprocess.CompletedProcess(
+            [], 137, "", "timeout: sending signal TERM to command ‘bash’\n"
+        )
+        with patch("rangebench.env.subprocess.run", return_value=command):
+            self.assertEqual(env.exec("sleep 10", timeout=1), (124, "[command timed out after 1s]"))
 
     def test_docker_timeout_is_not_scored_when_attacker_is_unavailable(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")

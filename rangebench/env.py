@@ -222,10 +222,13 @@ class TaskEnv:
                     workdir,
                     self.attacker,
                     "timeout",
+                    "--verbose",
                     "--kill-after=5s",
                     str(timeout),
                     "bash",
                     "-lc",
+                    'exec 2>&1; exec bash -lc "$1"',
+                    "_",
                     cmd,
                 ],
                 capture_output=True,
@@ -247,7 +250,10 @@ class TaskEnv:
                 and not attacker_available()
             ):
                 raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
-            if proc.returncode == 124:
+            # The child sends its stderr to stdout. Docker stderr contains only
+            # timeout diagnostics or Docker errors, so a child exit 124 is not
+            # mistaken for an expired deadline.
+            if proc.returncode in (124, 137) and "timeout: sending signal" in stderr:
                 return 124, f"[command timed out after {timeout}s]"
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""
