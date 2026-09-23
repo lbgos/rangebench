@@ -136,6 +136,7 @@ class TaskEnv:
         for net in self.task.attacker_networks:
             full = net if "_" in net else f"{self.project}_{net}"
             nets.append(full)
+        self.verify_isolation(nets)
         vol_args: list[str] = []
         for v in self.task.shared_volumes:
             name, _, dest = v.partition(":")
@@ -184,6 +185,28 @@ class TaskEnv:
             check=False,
             timeout=120,
         )
+
+    def verify_isolation(self, attacker_networks: list[str]) -> None:
+        """Reject Compose networks that would let a model reach outside the lab."""
+        project_networks = _run(
+            [
+                "docker",
+                "network",
+                "ls",
+                "--filter",
+                f"label=com.docker.compose.project={self.project}",
+                "--format",
+                "{{.Name}}",
+            ],
+            timeout=30,
+        ).stdout.splitlines()
+        for network in sorted(set(project_networks) | set(attacker_networks)):
+            internal = _run(
+                ["docker", "network", "inspect", "--format", "{{.Internal}}", network],
+                timeout=30,
+            ).stdout.strip()
+            if internal != "true":
+                raise EnvError(f"{self.task.id}: network {network} allows external access")
 
     def exec(
         self, cmd: str, timeout: int = 120, user: str = "agent", workdir: str = "/work"
