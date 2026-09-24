@@ -317,6 +317,7 @@ class AccountingTests(unittest.TestCase):
             keep=False,
         )
         result = AttemptResult(task.id, 1, effective_ctx_window=64000, end_reason="llm error")
+        result.compaction_fallbacks = 1
         result.model_usage.add(
             {
                 "prompt_tokens": 100,
@@ -351,6 +352,7 @@ class AccountingTests(unittest.TestCase):
             saved = json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]
             self.assertFalse(saved["scored"])
             self.assertEqual(saved["effective_ctx_window"], 64000)
+            self.assertEqual(saved["compaction_fallbacks"], 1)
             self.assertEqual((saved["input_tokens"], saved["output_tokens"]), (120, 45))
             self.assertEqual(saved["cache_read_tokens"], 60)
             self.assertEqual(saved["compaction_cache_read_tokens"], 0)

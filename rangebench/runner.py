@@ -49,6 +49,7 @@ class AttemptResult:
     completion_tokens: int = 0
     reasoning_tokens: int = 0
     compaction_tokens: int = 0
+    compaction_fallbacks: int = 0
     model_usage: Usage = field(default_factory=Usage)
     compaction_usage: Usage = field(default_factory=Usage)
     wall_s: float = 0.0
@@ -319,8 +320,18 @@ def _compact_history_llm(
             except Exception as exc:
                 return messages, total_usage, str(exc), True
             total_usage.merge(usage)
-            if err or not next_summary.strip():
-                return messages, total_usage, err or "empty compaction summary", True
+            if err:
+                return messages, total_usage, err, True
+            if not next_summary.strip():
+                fallback = _deterministic_trim(messages, keep_tail, note_chars)
+                if fallback == messages:
+                    return (
+                        messages,
+                        total_usage,
+                        "empty compaction summary; fallback unavailable",
+                        True,
+                    )
+                return fallback, total_usage, "empty compaction summary", False
             summary = _excerpt(next_summary.strip(), narrative_chars)
         summary_msg = {
             "role": "user",
@@ -388,6 +399,7 @@ def _maybe_compact(
             emit("compaction-error", error=err, est_tokens=est, compaction_tokens=comp_tokens)
             return messages
         if err:
+            res.compaction_fallbacks += 1
             emit(
                 "compaction-fallback",
                 error=err,

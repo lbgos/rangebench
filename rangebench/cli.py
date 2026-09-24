@@ -272,6 +272,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "completion_tokens": res.completion_tokens,
                     "reasoning_tokens": res.reasoning_tokens,
                     "compaction_tokens": res.compaction_tokens,
+                    "compaction_fallbacks": res.compaction_fallbacks,
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
                     "cache_read_tokens": usage.cache_read_tokens,

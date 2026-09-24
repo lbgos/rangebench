@@ -328,6 +328,32 @@ class CompactionTests(unittest.TestCase):
         self.assertIn("compaction-error", events)
         self.assertIs(compacted, messages)
 
+    def test_empty_visible_summary_uses_metered_deterministic_fallback(self) -> None:
+        messages = history(8, "service 8080 open " + "x" * 500)
+        messages[3]["content"] = _scored_feedback("web", "flag{web}", ["pwn"])
+        result = AttemptResult("test", 1)
+        events: list[tuple[str, dict]] = []
+        compacted = _maybe_compact(
+            FakeClient(""),
+            messages,
+            result,
+            1200,
+            200,
+            2,
+            0.8,
+            True,
+            lambda kind, **kwargs: events.append((kind, kwargs)),
+        )
+        self.assertNotEqual(compacted, messages)
+        self.assertEqual(result.end_reason, "")
+        self.assertEqual(result.compaction_fallbacks, 1)
+        self.assertEqual(result.compaction_tokens, 110)
+        self.assertEqual(result.compaction_usage.completion_tokens, 20)
+        self.assertEqual(_confirmed_stage_facts(compacted)[0]["flag"], "flag{web}")
+        self.assertEqual(compacted[-4:], messages[-4:])
+        fallback = next(payload for kind, payload in events if kind == "compaction-fallback")
+        self.assertEqual(fallback["error"], "empty compaction summary")
+
     def test_local_compaction_limit_keeps_deterministic_fallback(self) -> None:
         messages = history(8, "port 8080 open")
         compacted, tokens, error, api_error = _compact_history_llm(
