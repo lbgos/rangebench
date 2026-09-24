@@ -46,6 +46,21 @@ class RunnerTests(unittest.TestCase):
         kinds = [record["kind"] for record in records]
         self.assertLess(kinds.index("keep"), kinds.index("end"))
 
+    def test_missing_service_image_invalidates_attempt_before_model_call(self) -> None:
+        class MissingImageEnv(FakeEnv):
+            def up(self) -> None:
+                raise EnvError("no container for service target")
+
+        class NoCallsClient:
+            def chat(self, *_args: object, **_kwargs: object) -> None:
+                raise AssertionError("model was called")
+
+        with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", MissingImageEnv):
+            task = Task("sample", Path(tmp), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "target")])
+            result = run_attempt(NoCallsClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+        self.assertEqual(result.end_reason, "env: no container for service target")
+        self.assertEqual(result.service_image_ids, {})
+
     def test_oracle_failure_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             solution = Path(tmp) / "solution"
