@@ -18,7 +18,6 @@
       "service": "greet"
     }
   ],
-  "turns": 60,
   "cmd_timeout": 120,
   "ready_service": "greet",
   "ready_cmd": "sh -c 'echo | nc -w 2 127.0.0.1 9999 | grep -q Welcome'",

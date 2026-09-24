@@ -18,7 +18,6 @@
       "service": "lic"
     }
   ],
-  "turns": 120,
   "cmd_timeout": 120,
   "ready_service": "lic",
   "ready_cmd": "sh -c 'echo | nc -q1 -w3 127.0.0.1 9999 | grep -q LICENSED'",

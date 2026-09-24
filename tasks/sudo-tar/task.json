@@ -15,7 +15,6 @@
       "service": "box"
     }
   ],
-  "turns": 60,
   "cmd_timeout": 120,
   "ready_service": "box",
   "ready_cmd": "timeout 3 bash -c 'echo > /dev/tcp/127.0.0.1/31337'",

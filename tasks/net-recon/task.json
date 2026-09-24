@@ -15,7 +15,6 @@
       "service": "flagsvc"
     }
   ],
-  "turns": 30,
   "cmd_timeout": 180,
   "ready_service": "flagsvc",
   "ready_cmd": "sh -c 'echo | nc -w 2 127.0.0.1 31337 | grep -q SRVSTAT'",

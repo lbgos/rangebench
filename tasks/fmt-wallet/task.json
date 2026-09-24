@@ -18,7 +18,6 @@
       "service": "wallet"
     }
   ],
-  "turns": 120,
   "cmd_timeout": 120,
   "ready_service": "wallet",
   "ready_cmd": "sh -c 'echo quit | nc -q1 -w3 127.0.0.1 9999 | grep -q WALLET'",

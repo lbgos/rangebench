@@ -103,7 +103,7 @@ class Task:
         default_factory=list
     )  # compose volume mounted into attacker, e.g. "incident:/work/incident:ro"
     stages: list[Stage] = field(default_factory=list)
-    turns: int = 30
+    turns: int | None = None  # Optional diagnostic cap; release tasks have no turn limit.
     cmd_timeout: int = 120
     infra_timeout: int = 180  # minutes, soft infra guard, not scoring
     max_tokens: int = 32768  # per-turn generation limit
@@ -141,7 +141,7 @@ def load_task(task_id: str) -> Task:
         deploy=raw.get("deploy", []),
         shared_volumes=raw.get("shared_volumes", []),
         stages=stages,
-        turns=int(raw.get("turns", 30)),
+        turns=int(raw["turns"]) if raw.get("turns") is not None else None,
         cmd_timeout=int(raw.get("cmd_timeout", 120)),
         infra_timeout=int(infra),
         max_tokens=int(raw.get("max_tokens", 32768)),

@@ -18,7 +18,6 @@
       "service": "baker"
     }
   ],
-  "turns": 30,
   "cmd_timeout": 120,
   "infra_timeout": 180,
   "max_tokens": 32768,

@@ -15,7 +15,6 @@
       "service": "vault"
     }
   ],
-  "turns": 200,
   "cmd_timeout": 300,
   "infra_timeout": 240,
   "max_tokens": 32768,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 from collections.abc import Callable
@@ -593,7 +594,7 @@ def run_attempt(
     generation_cap = task.max_tokens
 
     try:
-        for turn in range(1, task.turns + 1):
+        for turn in range(1, task.turns + 1) if task.turns is not None else itertools.count(1):
             if time.time() > infra_deadline:
                 res.end_reason = "infra timeout"
                 break

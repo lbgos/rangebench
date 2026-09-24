@@ -18,7 +18,6 @@
       "service": "notes"
     }
   ],
-  "turns": 120,
   "cmd_timeout": 120,
   "ready_service": "notes",
   "ready_cmd": "sh -c 'echo 3 | nc -q1 -w3 127.0.0.1 9999 | grep -q notes'",
