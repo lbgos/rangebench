@@ -274,6 +274,7 @@ def _compact_history_llm(
     note_chars: int = 6500,
     ctx_window: int = DEFAULT_CTX_WINDOW,
     token_density: float = 1.5,
+    remaining_output_tokens: int | None = None,
 ) -> tuple[list[dict], Usage, str | None, bool]:
     """Process every middle message in bounded, separately metered summary calls."""
     ctx_window = min(ctx_window, MAX_CTX_WINDOW)
@@ -313,9 +314,16 @@ def _compact_history_llm(
                 {"role": "system", "content": COMPACTION_SYSTEM},
                 {"role": "user", "content": prefix + memory + "Transcript chunk:\n" + chunk},
             ]
+            call_max_tokens = summary_max_tokens
+            if remaining_output_tokens is not None:
+                call_max_tokens = min(
+                    call_max_tokens, remaining_output_tokens - total_usage.completion_tokens
+                )
+            if call_max_tokens <= 0:
+                return messages, total_usage, "output token budget", False
             try:
                 next_summary, usage, err = client.chat(
-                    comp_messages, max_tokens=summary_max_tokens, temperature=0.0
+                    comp_messages, max_tokens=call_max_tokens, temperature=0.0
                 )
             except Exception as exc:
                 return messages, total_usage, str(exc), True
@@ -378,6 +386,7 @@ def _maybe_compact(
     emit: Callable[..., None],
     previous_prompt_tokens: int = 0,
     previous_estimate: int = 0,
+    res_output_budget: int | None = None,
 ) -> list[dict]:
     ctx_window = min(ctx_window, MAX_CTX_WINDOW)
     est = _calibrated_tokens(messages, previous_prompt_tokens, previous_estimate)
@@ -405,13 +414,39 @@ def _maybe_compact(
     tail_tokens = _calibrated_tokens(head + tail, previous_prompt_tokens, previous_estimate)
     note_chars = max(100, min(24000, int((limit - tail_tokens - 32) * 4 / token_density)))
     if use_llm:
+        remaining_output_tokens = (
+            max(
+                0,
+                res_output_budget - res.completion_tokens - res.compaction_usage.completion_tokens,
+            )
+            if res_output_budget is not None
+            else None
+        )
         new_messages, usage, err, api_error = _compact_history_llm(
-            client, messages, keep_tail, min(note_chars, 6500), ctx_window, token_density
+            client,
+            messages,
+            keep_tail,
+            min(note_chars, 6500),
+            ctx_window,
+            token_density,
+            remaining_output_tokens,
         )
         res.compaction_usage.merge(usage)
         comp_tokens = usage.prompt_tokens + usage.completion_tokens
         res.compaction_tokens += comp_tokens
         emit("compaction-call", usage=usage.as_dict(), error=err)
+        if err == "output token budget" or (
+            res_output_budget is not None
+            and res.completion_tokens + res.compaction_usage.completion_tokens >= res_output_budget
+        ):
+            res.end_reason = "output token budget"
+            emit(
+                "budget",
+                reason=res.end_reason,
+                total_out=res.completion_tokens + res.compaction_usage.completion_tokens,
+                budget=res_output_budget,
+            )
+            return messages
         if api_error:
             res.end_reason = "llm error"
             emit("compaction-error", error=err, est_tokens=est, compaction_tokens=comp_tokens)
@@ -443,7 +478,7 @@ def _maybe_compact(
 
 def _is_context_length_error(error: str) -> bool:
     lower = error.lower()
-    if "http 429" in lower:
+    if "http 429" in lower or _is_output_limit_error(error):
         return False
     return any(
         marker in lower
@@ -453,10 +488,28 @@ def _is_context_length_error(error: str) -> bool:
             "context window",
             "maximum context",
             "prompt is too long",
-            "too many tokens",
             "http 413",
         )
     )
+
+
+def _is_output_limit_error(error: str) -> bool:
+    lower = error.lower()
+    if any(
+        marker in lower
+        for marker in ("context_length_exceeded", "context length", "context window")
+    ):
+        return False
+    return any(
+        marker in lower
+        for marker in (
+            "max_tokens",
+            "max output tokens",
+            "maximum output tokens",
+            "output token limit",
+            "completion token limit",
+        )
+    ) and any(marker in lower for marker in ("exceed", "too large", "maximum", "limit", "must be"))
 
 
 def run_attempt(
@@ -523,7 +576,7 @@ def run_attempt(
                 res.end_reason = "infra timeout"
                 break
             # Provider completion tokens include the reasoning-token breakdown.
-            total_out = res.completion_tokens
+            total_out = res.completion_tokens + res.compaction_usage.completion_tokens
             if total_out >= task.max_output_tokens:
                 res.end_reason = "output token budget"
                 emit(
@@ -534,6 +587,7 @@ def run_attempt(
                 )
                 break
             res.turns_used = turn
+            generation_cap = task.max_tokens
             for retry in range(9):
                 messages = _maybe_compact(
                     client,
@@ -547,19 +601,27 @@ def run_attempt(
                     emit,
                     previous_prompt_tokens=previous_prompt_tokens,
                     previous_estimate=previous_estimate,
+                    res_output_budget=task.max_output_tokens,
                 )
                 if res.end_reason:
                     break
                 request_max_tokens = _request_max_tokens(
                     messages,
                     ctx_window,
-                    task.max_tokens,
+                    generation_cap,
                     previous_prompt_tokens,
                     previous_estimate,
-                    task.max_output_tokens - res.completion_tokens,
+                    task.max_output_tokens
+                    - res.completion_tokens
+                    - res.compaction_usage.completion_tokens,
                 )
                 if request_max_tokens <= 0:
-                    res.end_reason = "context window exhausted"
+                    res.end_reason = (
+                        "output token budget"
+                        if res.completion_tokens + res.compaction_usage.completion_tokens
+                        >= task.max_output_tokens
+                        else "context window exhausted"
+                    )
                     emit("budget", reason=res.end_reason, est_tokens=_estimate_tokens(messages))
                     break
                 if request_max_tokens < task.max_tokens:
@@ -574,6 +636,10 @@ def run_attempt(
                 res.prompt_tokens += usage.prompt_tokens
                 res.completion_tokens += usage.completion_tokens
                 res.reasoning_tokens += usage.reasoning_tokens
+                if err and _is_output_limit_error(err) and retry < 8 and request_max_tokens > 1:
+                    generation_cap = max(1, request_max_tokens // 2)
+                    emit("generation-retry", error=err, max_tokens=generation_cap)
+                    continue
                 if err and _is_context_length_error(err) and retry < 8 and ctx_window > 256:
                     ctx_window = max(256, ctx_window // 2)
                     res.effective_ctx_window = ctx_window

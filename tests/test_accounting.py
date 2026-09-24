@@ -121,6 +121,36 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(usage.completion_tokens, 40)
         self.assertEqual(usage.reasoning_tokens, 30)
 
+    def test_total_tokens_covers_split_reasoning_output(self) -> None:
+        usage = Usage()
+        usage.add(
+            {
+                "prompt_tokens": 4,
+                "completion_tokens": 2,
+                "total_tokens": 76,
+                "completion_tokens_details": {"reasoning_tokens": 70},
+            }
+        )
+        self.assertEqual(
+            (usage.input_tokens, usage.output_tokens, usage.reasoning_tokens), (4, 72, 70)
+        )
+
+        nested = Usage()
+        nested.add(
+            {
+                "prompt_tokens": 55,
+                "completion_tokens": 37,
+                "total_tokens": 92,
+                "completion_tokens_details": {"reasoning_tokens": 34},
+            }
+        )
+        self.assertEqual((nested.input_tokens, nested.output_tokens), (55, 37))
+
+        for total in (True, -1, 5, "76"):
+            with self.subTest(total=total):
+                with self.assertRaisesRegex(ValueError, "total_tokens"):
+                    Usage().add({"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": total})
+
     def test_openai_cache_and_missing_metadata_are_distinct(self) -> None:
         usage = Usage()
         usage.add(

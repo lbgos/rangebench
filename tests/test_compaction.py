@@ -16,6 +16,7 @@ from rangebench.runner import (
     _deterministic_trim,
     _estimate_tokens,
     _is_context_length_error,
+    _is_output_limit_error,
     _maybe_compact,
     _next_transcript_chunk,
     _request_max_tokens,
@@ -382,6 +383,43 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(usage.prompt_tokens, 180)
         self.assertEqual(usage.completion_tokens, 2000)
 
+    def test_compaction_calls_share_attempt_output_budget(self) -> None:
+        class BudgetClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                super().chat(messages, max_tokens, temperature)
+                return "summary", Usage(prompt_tokens=90, completion_tokens=max_tokens), None
+
+        client = BudgetClient()
+        messages = history(20, "x" * 3000)
+        _, usage, error, api_error = _compact_history_llm(
+            client, messages, 2, ctx_window=8000, token_density=2.0, remaining_output_tokens=1200
+        )
+        self.assertEqual(client.limits, [1000, 200])
+        self.assertEqual(usage.completion_tokens, 1200)
+        self.assertEqual(error, "output token budget")
+        self.assertFalse(api_error)
+
+        result = AttemptResult("test", 1, completion_tokens=10)
+        events: list[tuple[str, dict]] = []
+        capped_client = FakeClient("")
+        _maybe_compact(
+            capped_client,
+            history(8, "x" * 500),
+            result,
+            1200,
+            200,
+            2,
+            0.8,
+            True,
+            lambda kind, **kwargs: events.append((kind, kwargs)),
+            res_output_budget=25,
+        )
+        self.assertEqual(result.end_reason, "output token budget")
+        self.assertEqual(result.compaction_usage.completion_tokens, 20)
+        self.assertEqual(capped_client.limits, [15])
+
     def test_local_compaction_limit_keeps_deterministic_fallback(self) -> None:
         messages = history(8, "port 8080 open")
         compacted, tokens, error, api_error = _compact_history_llm(
@@ -505,7 +543,52 @@ class CompactionTests(unittest.TestCase):
 
     def test_rate_limit_does_not_shrink_context_window(self) -> None:
         self.assertFalse(_is_context_length_error("HTTP 429: too many tokens requested"))
+        self.assertFalse(_is_context_length_error("HTTP 400: max_tokens exceeds output limit"))
+        self.assertTrue(_is_output_limit_error("HTTP 400: max_tokens exceeds output limit"))
         self.assertTrue(_is_context_length_error("HTTP 400: context_length_exceeded"))
+        self.assertTrue(
+            _is_context_length_error("HTTP 400: max_tokens plus prompt exceeds context length")
+        )
+
+    def test_output_cap_retry_keeps_context_window(self) -> None:
+        class FakeEnv:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
+                pass
+
+            def up(self) -> None:
+                pass
+
+            def down(self) -> tuple[bool, None]:
+                return True, None
+
+        class CappedClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                self.limits.append(max_tokens)
+                if max_tokens > 8192:
+                    return "", Usage(), "HTTP 400: max_tokens exceeds output limit"
+                return "no command", Usage(prompt_tokens=100, completion_tokens=3), None
+
+        task = SimpleNamespace(
+            id="output-cap",
+            statement="A small task",
+            stages=[],
+            turns=1,
+            infra_timeout=5,
+            max_tokens=32768,
+            max_output_tokens=100000,
+            canary="",
+        )
+        client = CappedClient()
+        with TemporaryDirectory() as directory, patch("rangebench.runner.TaskEnv", FakeEnv):
+            result = run_attempt(
+                client, task, 1, "test", Path(directory), verbose=False, ctx_window=50000
+            )
+        self.assertEqual(client.limits, [32768, 16384, 8192])
+        self.assertEqual(result.effective_ctx_window, 50000)
+        self.assertNotEqual(result.end_reason, "llm error")
 
     def test_generation_limit_uses_remaining_attempt_output_budget(self) -> None:
         messages = history(1)

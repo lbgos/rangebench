@@ -64,6 +64,7 @@ class Usage:
             "input_tokens",
             "completion_tokens",
             "output_tokens",
+            "total_tokens",
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
             "cache_write_tokens",
@@ -139,6 +140,14 @@ class Usage:
         # OpenAI completion_tokens already includes reasoning_tokens. Keep the
         # latter as a breakdown, not an additional charge against the budget.
         completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
+        if provider != "anthropic" and "total_tokens" in other:
+            reported_input = int(other.get("prompt_tokens") or other.get("input_tokens") or 0)
+            total = other["total_tokens"]
+            if total < reported_input + completion:
+                raise TokenUsageError(
+                    "malformed token usage: total_tokens is below input plus output"
+                )
+            completion = max(completion, total - reported_input)
         self.completion_tokens += max(completion, reasoning)
         self.reasoning_tokens += reasoning
 
