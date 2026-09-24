@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .agent import SYSTEM, ChatClientProtocol, Usage, parse_turn
+from .agent import SYSTEM, ChatClientProtocol, ChatResult, ResponseMetadata, Usage, parse_turn
 from .env import ATTACKER_IMAGE, EnvError, Task, TaskEnv, truncate_output
 
 WRONG_LIMIT = 3
@@ -74,6 +74,17 @@ def _estimate_tokens(messages: list[dict]) -> int:
     # rough estimate: 4 chars ~ 1 token, plus overhead per message
     total_chars = sum(len(m.get("content") or "") for m in messages)
     return total_chars // 4 + len(messages) * 8
+
+
+def _chat_with_metadata(
+    client: ChatClientProtocol, messages: list[dict], max_tokens: int
+) -> tuple[str, Usage, str | None, ResponseMetadata | None]:
+    rich_chat = getattr(client, "chat_result", None)
+    if rich_chat is None:
+        content, usage, error = client.chat(messages, max_tokens=max_tokens)
+        return content, usage, error, None
+    result: ChatResult = rich_chat(messages, max_tokens=max_tokens)
+    return result.content, result.usage, result.error, result.metadata
 
 
 def _calibrated_tokens(
@@ -726,9 +737,26 @@ def run_attempt(
                 if request_max_tokens < task.max_tokens:
                     emit("generation-cap", max_tokens=request_max_tokens)
                 estimate_before = _estimate_tokens(messages)
-                content, usage, err = client.chat(messages, max_tokens=request_max_tokens)
+                content, usage, err, response_meta = _chat_with_metadata(
+                    client, messages, max_tokens=request_max_tokens
+                )
                 res.model_usage.merge(usage)
-                emit("llm-call", n=turn, usage=usage.as_dict(), error=err)
+                emit(
+                    "llm-call",
+                    n=turn,
+                    usage=usage.as_dict(),
+                    error=err,
+                    response_meta=(
+                        {
+                            "finish_reason": response_meta.finish_reason,
+                            "visible_content_empty": response_meta.visible_content_empty,
+                            "reasoning_content_present": response_meta.reasoning_content_present,
+                            "requested_max_tokens": response_meta.requested_max_tokens,
+                        }
+                        if response_meta is not None
+                        else None
+                    ),
+                )
                 if usage.prompt_tokens:
                     previous_prompt_tokens = usage.prompt_tokens
                     previous_estimate = estimate_before

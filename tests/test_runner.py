@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rangebench.agent import Usage
+from rangebench.agent import ChatResult, ResponseMetadata, Usage
 from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task, TaskEnv, load_all
 from rangebench.runner import run_attempt, run_oracle
 
@@ -41,6 +41,45 @@ class NoCallsClient:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_llm_event_records_response_shape_without_response_text(self) -> None:
+        class MetadataClient:
+            def chat(self, *_args: object, **_kwargs: object) -> None:
+                raise AssertionError("legacy chat should not be used")
+
+            def chat_result(
+                self, _messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> ChatResult:
+                return ChatResult(
+                    "ANSWER: flag{test}",
+                    Usage(prompt_tokens=20, completion_tokens=10),
+                    None,
+                    ResponseMetadata("stop", False, True, max_tokens),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", FakeEnv):
+            task = Task(
+                "sample", Path(tmp), "web", 1, "Find the flag",
+                stages=[Stage("one", "/flag", "target")],
+            )
+            result = run_attempt(MetadataClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+            records = [
+                json.loads(line)
+                for line in (Path(tmp) / "sample-t1.jsonl").read_text().splitlines()
+            ]
+
+        self.assertEqual(result.end_reason, "all stages captured")
+        call = next(record for record in records if record["kind"] == "llm-call")
+        self.assertEqual(
+            call["response_meta"],
+            {
+                "finish_reason": "stop",
+                "visible_content_empty": False,
+                "reasoning_content_present": True,
+                "requested_max_tokens": task.max_tokens,
+            },
+        )
+        self.assertNotIn("content", call)
+
     def test_release_tasks_allow_more_than_previous_turn_cap(self) -> None:
         class SlowClient:
             def __init__(self) -> None:
