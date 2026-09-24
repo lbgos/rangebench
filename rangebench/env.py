@@ -385,7 +385,11 @@ class TaskEnv:
         the attempt if Docker still has not returned.
         """
 
-        if len(cmd.encode("utf-8")) > MAX_COMMAND_BYTES:
+        try:
+            command_bytes = len(cmd.encode("utf-8"))
+        except UnicodeEncodeError:
+            return 1, "[command contains invalid UTF-8]"
+        if command_bytes > MAX_COMMAND_BYTES:
             return 1, f"[command exceeds {MAX_COMMAND_BYTES} UTF-8 bytes]"
 
         def attacker_available() -> bool:

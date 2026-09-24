@@ -414,6 +414,13 @@ class AccountingTests(unittest.TestCase):
         self.assertNotIn(command[:20], output)
         run.assert_not_called()
 
+    def test_invalid_utf8_command_is_scored_without_spawning_docker(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        with patch("rangebench.env.subprocess.run") as run:
+            self.assertEqual(env.exec("echo \udcff"), (1, "[command contains invalid UTF-8]"))
+        run.assert_not_called()
+
     def test_e2big_from_subprocess_is_scored_without_command_content(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test")
