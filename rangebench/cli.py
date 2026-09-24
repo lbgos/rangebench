@@ -113,6 +113,16 @@ def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None
         "task_set_hash": _get_task_set_hash(),
         "task_count": len(doc.get("tasks", [])),
         "output_tokens_include_reasoning": True,
+        "usage_coverage": {
+            key: sum(int(task.get(key) or 0) for task in doc.get("tasks", []))
+            for key in (
+                "api_calls",
+                "api_requests",
+                "usage_reported_calls",
+                "input_reported_calls",
+                "output_reported_calls",
+            )
+        },
     }
     if extra:
         manifest.update(extra)

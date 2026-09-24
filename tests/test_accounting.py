@@ -6,13 +6,67 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rangebench.agent import Usage
+from rangebench.agent import AnthropicChatClient, ChatClient, Usage
 from rangebench.cli import _get_git_commit, _get_task_set_hash, cmd_preflight, cmd_run
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
 from rangebench.runner import AttemptResult, _maybe_compact
 
 
 class AccountingTests(unittest.TestCase):
+    def test_missing_token_usage_invalidates_successful_response(self) -> None:
+        class Response:
+            def __init__(self, body: dict):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.body).encode()
+
+        cases = (
+            (
+                ChatClient("http://localhost/v1", "key", "test"),
+                "prompt_tokens",
+                "completion_tokens",
+                {"choices": [{"message": {"content": "ANSWER: flag{test}"}}]},
+            ),
+            (
+                AnthropicChatClient("http://localhost", "key", "test"),
+                "input_tokens",
+                "output_tokens",
+                {"content": [{"type": "text", "text": "ANSWER: flag{test}"}]},
+            ),
+        )
+        for client, input_key, output_key, body in cases:
+            for missing_key in (input_key, output_key):
+                with self.subTest(client=type(client).__name__, missing=missing_key):
+                    body["usage"] = {input_key: 0, output_key: 0}
+                    del body["usage"][missing_key]
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ) as urlopen:
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(error, "missing input or output token usage")
+                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (1, 1, 1))
+                    self.assertEqual(usage.input_reported_calls, int(missing_key != input_key))
+                    self.assertEqual(usage.output_reported_calls, int(missing_key != output_key))
+                    urlopen.assert_called_once()
+
+            with self.subTest(client=type(client).__name__, zero_usage=True):
+                body["usage"] = {input_key: 0, output_key: 0}
+                with patch("rangebench.agent.urllib.request.urlopen", return_value=Response(body)):
+                    content, usage, error = client.chat([{"role": "user", "content": "test"}], 10)
+                self.assertIn("ANSWER:", content)
+                self.assertIsNone(error)
+                self.assertEqual((usage.input_reported_calls, usage.output_reported_calls), (1, 1))
+
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()
         usage.add(
@@ -302,7 +356,18 @@ class AccountingTests(unittest.TestCase):
             self.assertIsNone(saved["cache_write_tokens"])
             self.assertEqual(saved["cache_read_reported_calls"], 2)
             manifest = next(Path(tmp).glob("*/manifest.json"))
-            self.assertEqual(json.loads(manifest.read_text())["status"], "completed_with_errors")
+            manifest_data = json.loads(manifest.read_text())
+            self.assertEqual(manifest_data["status"], "completed_with_errors")
+            self.assertEqual(
+                manifest_data["usage_coverage"],
+                {
+                    "api_calls": 2,
+                    "api_requests": 0,
+                    "usage_reported_calls": 2,
+                    "input_reported_calls": 2,
+                    "output_reported_calls": 2,
+                },
+            )
 
     def test_preflight_stops_if_attacker_build_fails(self) -> None:
         with (

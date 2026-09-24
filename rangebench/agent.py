@@ -60,9 +60,9 @@ class Usage:
         output_details = other.get("completion_tokens_details") or {}
         if not output_details:
             output_details = other.get("output_tokens_details") or {}
-        if "prompt_tokens" in other or "input_tokens" in other:
+        if other.get("prompt_tokens") is not None or other.get("input_tokens") is not None:
             self.input_reported_calls += 1
-        if "completion_tokens" in other or "output_tokens" in other:
+        if other.get("completion_tokens") is not None or other.get("output_tokens") is not None:
             self.output_reported_calls += 1
         if provider == "anthropic":
             read = other.get("cache_read_input_tokens")
@@ -175,6 +175,11 @@ class ChatClient:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
                 usage.add(body.get("usage"))
+                if (
+                    usage.input_reported_calls < usage.calls
+                    or usage.output_reported_calls < usage.calls
+                ):
+                    return "", usage, "missing input or output token usage"
                 choice = (body.get("choices") or [{}])[0]
                 msg = choice.get("message") or {}
                 content = msg.get("content")
@@ -247,6 +252,11 @@ class AnthropicChatClient:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
                 usage.add(body.get("usage"), provider="anthropic")
+                if (
+                    usage.input_reported_calls < usage.calls
+                    or usage.output_reported_calls < usage.calls
+                ):
+                    return "", usage, "missing input or output token usage"
                 content_blocks = body.get("content") or []
                 text = ""
                 for b in content_blocks:
