@@ -1,4 +1,4 @@
-"""CLI: list / check (oracle) / run (agent) / smoke."""
+"""CLI: list / identities / check (oracle) / run (agent) / smoke."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .agent import AnthropicChatClient, ChatClient, ChatClientProtocol
 from .env import TASKS_DIR, load_all, load_task
+from .identity import all_task_identities
 from .runner import (
     DEFAULT_CTX_WINDOW,
     DEFAULT_KEEP_TAIL,
@@ -183,6 +184,13 @@ def cmd_list(_args: argparse.Namespace) -> None:
         print(
             f"{t.id:24} {t.category:10} T{t.tier:<3} {len(t.stages):<6} {str(t.turns) if t.turns is not None else '∞':<5} {t.infra_timeout:<6} {t.max_output_tokens:<10} {t.statement[:60]}"
         )
+
+
+def cmd_identities(_args: argparse.Namespace) -> None:
+    """Print each task's per-task identity hash, sorted by task name."""
+    print(f"{'task':24} identity")
+    for tid, ident in all_task_identities(TASKS_DIR).items():
+        print(f"{tid:24} {ident}")
 
 
 def cmd_check(args: argparse.Namespace) -> None:
@@ -464,6 +472,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(prog="rangebench")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list").set_defaults(func=cmd_list)
+    ident = sub.add_parser("identities", help="print per-task identity hashes")
+    ident.set_defaults(func=cmd_identities)
     chk = sub.add_parser("check", help="run oracle solutions against live envs")
     chk.add_argument("tasks", nargs="+")
     chk.set_defaults(func=cmd_check)
