@@ -29,7 +29,6 @@ History compaction happens near the context window. The harness keeps the last 1
 You need Docker with the compose plugin and Python 3.11 or newer.
 
 ```bash
-docker build -t rb-attacker:latest attacker/
 python3 -m rangebench preflight
 python3 -m rangebench list
 python3 -m rangebench check net-recon jwt-none
@@ -56,13 +55,13 @@ For a remote host set `REMOTE=user@host REMOTE_DIR=~/rangebench`.
 
 ## reports
 
-`results/<runid>/` has a jsonl transcript per attempt and a `*.json` summary. `run` prints a per-task table after it finishes, plus per-category and per-tier counts. With `--trials 2` or more it adds a Wilson interval. Tokens and wall time are in the table.
+`results/<runid>/` has a jsonl transcript per attempt and a manifest. The summary is `results/<runid>.json`. `run` prints a per-task table after it finishes, plus per-category and per-tier counts. With `--trials 2` or more it adds a Wilson interval. Tokens and wall time are in the table.
 
 Live results at [lbgos.dev/bench](https://lbgos.dev/bench).
 
 ## reproducibility
 
-Pin these for a comparable run: task set, task definitions, harness, attacker image digest. `preflight` pulls and prints digests, `run` writes them to `manifest.json`. Compare only within one bench version.
+Pin these for a comparable run: task source, harness source, and attacker image ID. `run` writes their fingerprints to `manifest.json`. A failed environment or model API call marks the trial invalid, excludes it from the score, and makes the command exit nonzero after writing artifacts. `completion_tokens` includes reasoning tokens, which are also reported as a breakdown. `input_tokens` and `output_tokens` include compaction calls; `prompt_tokens` and `completion_tokens` retain the agent-call totals. Cache read/write totals include reported values only. A `null` cache count means no cache count was reported; `0` means a reported zero. Check `cache_*_reported_calls` and `input/output_reported_calls` against `api_calls` before pricing a run. `api_requests` counts retries too, which may lack usage. Each returned call's usage is also in the attempt JSONL. Compare only within one bench version.
 
 ## notes
 

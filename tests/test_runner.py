@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from rangebench.agent import Usage
-from rangebench.env import EnvError, Stage, Task
+from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task
 from rangebench.runner import run_attempt, run_oracle
 
 
 class FakeEnv:
-    def __init__(self, task: Task, project: str):
+    def __init__(self, task: Task, project: str, attacker_image: str = ATTACKER_IMAGE):
         self.attacker = f"{project}-atk"
+        self.attacker_image = attacker_image
 
     def up(self) -> None:
         pass

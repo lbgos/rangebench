@@ -93,7 +93,10 @@ def load_all() -> list[Task]:
 
 
 def _run(cmd: list[str], timeout: int = 300, check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise EnvError(f"{' '.join(cmd[:6])}... timed out after {timeout}s") from exc
     if check and proc.returncode != 0:
         raise EnvError(f"{' '.join(cmd[:6])}... failed: {(proc.stderr or proc.stdout)[-800:]}")
     return proc
@@ -102,10 +105,11 @@ def _run(cmd: list[str], timeout: int = 300, check: bool = True) -> subprocess.C
 class TaskEnv:
     """One attempt of one task: fresh compose project + fresh attacker container."""
 
-    def __init__(self, task: Task, project: str):
+    def __init__(self, task: Task, project: str, attacker_image: str = ATTACKER_IMAGE):
         self.task = task
         self.project = project
         self.attacker = f"{project}-atk"
+        self.attacker_image = attacker_image
 
     def up(self, build: bool = True) -> None:
         compose = [
@@ -166,7 +170,7 @@ class TaskEnv:
                 "-v",
                 pip_vol,
                 *vol_args,
-                ATTACKER_IMAGE,
+                self.attacker_image,
                 "sleep",
                 "infinity",
             ],
@@ -250,20 +254,77 @@ class TaskEnv:
     def exec(
         self, cmd: str, timeout: int = 120, user: str = "agent", workdir: str = "/work"
     ) -> tuple[int, str]:
-        """Run a bash command in the attacker container, return (rc, output)."""
+        """Run a bash command in the attacker container, return (rc, output).
+
+        GNU timeout stops the command process group. Commands that deliberately
+        detach into a new session can outlive it; an outer timeout invalidates
+        the attempt if Docker still has not returned.
+        """
+
+        def attacker_available() -> bool:
+            try:
+                probe = subprocess.run(
+                    ["docker", "exec", self.attacker, "true"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise EnvError("Docker exec probe timed out") from exc
+            return probe.returncode == 0
+
         try:
             proc = subprocess.run(
-                ["docker", "exec", "-u", user, "-w", workdir, self.attacker, "bash", "-lc", cmd],
+                [
+                    "docker",
+                    "exec",
+                    "-u",
+                    user,
+                    "-w",
+                    workdir,
+                    self.attacker,
+                    "timeout",
+                    "--verbose",
+                    "--kill-after=5s",
+                    str(timeout),
+                    "bash",
+                    "-lc",
+                    'exec 2>&1; exec bash -lc "$1"',
+                    "_",
+                    cmd,
+                ],
                 capture_output=True,
                 text=True,
-                timeout=timeout,
+                timeout=timeout + 15,
             )
+            stderr = (proc.stderr or "").lstrip()
+            # docker exec forwards command stderr, so confirm a matching
+            # message is from Docker before invalidating the attempt.
+            if (
+                proc.returncode != 0
+                and stderr.startswith(
+                    (
+                        "Cannot connect to the Docker daemon",
+                        "error during connect:",
+                        "Error response from daemon:",
+                    )
+                )
+                and not attacker_available()
+            ):
+                raise EnvError(f"Docker exec failed before attacker command: {stderr[-300:]}")
+            # The child sends its stderr to stdout. Docker stderr contains only
+            # timeout diagnostics or Docker errors, so a child exit 124 is not
+            # mistaken for an expired deadline.
+            if proc.returncode in (124, 137) and "timeout: sending signal" in stderr:
+                return 124, f"[command timed out after {timeout}s]"
             out = (proc.stdout or "") + (
                 ("\n[stderr]\n" + proc.stderr) if proc.stderr.strip() else ""
             )
             return proc.returncode, out
-        except subprocess.TimeoutExpired:
-            return 124, f"[command timed out after {timeout}s]"
+        except subprocess.TimeoutExpired as exc:
+            if not attacker_available():
+                raise EnvError("Docker exec unavailable after attacker command timeout") from exc
+            raise EnvError("Docker exec did not finish after attacker command timeout") from exc
 
     def read_flag(self, stage: Stage) -> str:
         compose = [
