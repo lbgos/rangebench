@@ -450,6 +450,39 @@ class AccountingTests(unittest.TestCase):
                 change(changed)
                 self.assertNotEqual(image_content_fingerprint(image), image_content_fingerprint(changed))
 
+    def test_image_fingerprint_normalizes_inspect_api_defaults(self) -> None:
+        image = {
+            "Config": {"Cmd": ["run"], "Env": ["MODE=production"]},
+            "RootFS": {"Layers": ["sha256:layer"]},
+            "Os": "linux",
+            "Architecture": "amd64",
+        }
+        older_api = json.loads(json.dumps(image))
+        older_api["Config"].update({
+            "Hostname": "",
+            "Domainname": "",
+            "AttachStdin": False,
+            "Image": "",
+            "Entrypoint": None,
+            "Labels": {"com.docker.compose.project": "run-a"},
+            "OnBuild": [],
+            "User": "",
+            "Volumes": {},
+            "WorkingDir": "",
+        })
+        self.assertEqual(image_content_fingerprint(image), image_content_fingerprint(older_api))
+
+        for field, value in (
+            ("Cmd", ["different"]),
+            ("Healthcheck", {"Test": ["CMD", "true"]}),
+            ("ArgsEscaped", True),
+            ("Shell", ["/bin/bash", "-c"]),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(image))
+                changed["Config"][field] = value
+                self.assertNotEqual(image_content_fingerprint(image), image_content_fingerprint(changed))
+
     def test_service_fingerprints_inspect_exact_image_ids(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test")

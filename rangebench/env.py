@@ -15,6 +15,23 @@ ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = ROOT / "tasks"
 ATTACKER_IMAGE = "rb-attacker:latest"
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+# Docker's inspect API has added and removed non-image Config fields across versions.
+# Keep the fields that belong to the image configuration.
+IMAGE_CONFIG_FIELDS = (
+    "User",
+    "ExposedPorts",
+    "Env",
+    "Entrypoint",
+    "Cmd",
+    "Volumes",
+    "WorkingDir",
+    "Labels",
+    "StopSignal",
+    "ArgsEscaped",
+    "Healthcheck",
+    "Shell",
+    "OnBuild",
+)
 
 
 class EnvError(RuntimeError):
@@ -22,7 +39,7 @@ class EnvError(RuntimeError):
 
 
 def image_content_fingerprint(image: dict) -> str:
-    """Hash image contents, ignoring only Compose's per-attempt project label."""
+    """Hash layers and image config across Docker inspect API versions."""
     config = image.get("Config")
     rootfs = image.get("RootFS")
     if not isinstance(config, dict) or not isinstance(rootfs, dict):
@@ -39,14 +56,16 @@ def image_content_fingerprint(image: dict) -> str:
         or not architecture
     ):
         raise EnvError("image inspect is missing OS or architecture")
-    normalized_config = config.copy()
-    labels = config.get("Labels")
-    if labels is not None:
-        if not isinstance(labels, dict):
-            raise EnvError("image inspect has invalid Config labels")
-        normalized_labels = labels.copy()
-        normalized_labels.pop(COMPOSE_PROJECT_LABEL, None)
-        normalized_config["Labels"] = normalized_labels
+    normalized_config = {}
+    for name in IMAGE_CONFIG_FIELDS:
+        value = config.get(name)
+        if name == "Labels" and value is not None:
+            if not isinstance(value, dict):
+                raise EnvError("image inspect has invalid Config labels")
+            value = {key: label for key, label in value.items() if key != COMPOSE_PROJECT_LABEL}
+        if value is None or value is False or isinstance(value, (str, list, dict)) and not value:
+            continue
+        normalized_config[name] = value
     payload = {
         "Config": normalized_config,
         "RootFS.Layers": layers,
