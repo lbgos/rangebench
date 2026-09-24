@@ -346,6 +346,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "compaction_cache_read_tokens": res.compaction_usage.cache_read_tokens,
                     "compaction_cache_write_tokens": res.compaction_usage.cache_write_tokens,
                     "wall_s": res.wall_s,
+                    "wall_clock_seconds": res.wall_clock_seconds,
+                    "wall_clock_exceeded": res.wall_clock_exceeded,
                     "end_reason": res.end_reason,
                     "max_output_tokens": task.max_output_tokens,
                 }

@@ -42,6 +42,15 @@ class EnvError(RuntimeError):
     pass
 
 
+def wall_clock_default(tier: int) -> int:
+    """Whole-attempt wall-clock cap in seconds when task.json sets no wall_clock."""
+    if tier <= 2:
+        return 600
+    if tier == 3:
+        return 1200
+    return 1800
+
+
 def image_content_fingerprint(image: dict) -> str:
     """Hash layers and image config across Docker inspect API versions."""
     config = image.get("Config")
@@ -96,6 +105,7 @@ class Task:
     category: str
     tier: int
     statement: str
+    wall_clock: int = 600  # seconds, whole-attempt cap; unset means tier default
     compose: str = "docker-compose.yml"
     attacker_networks: list[str] = field(default_factory=lambda: ["default"])
     deploy: list[str] = field(default_factory=list)  # copied into attacker /work
@@ -130,11 +140,18 @@ def load_task(task_id: str) -> Task:
     infra = raw.get("infra_timeout")
     if infra is None:
         infra = raw.get("wall_min", 180)
+    tier = int(raw["tier"])
+    wall_clock = raw.get("wall_clock")
+    if wall_clock is None:
+        wall_clock = wall_clock_default(tier)
+    wall_clock = int(wall_clock)
+    if wall_clock <= 0:
+        raise EnvError(f"{task_id}: wall_clock must be a positive number of seconds")
     return Task(
         id=task_id,
         dir=d,
         category=raw["category"],
-        tier=int(raw["tier"]),
+        tier=tier,
         statement=raw["statement"],
         compose=raw.get("compose", "docker-compose.yml"),
         attacker_networks=raw.get("attacker_networks", ["default"]),
@@ -149,6 +166,7 @@ def load_task(task_id: str) -> Task:
         ready_service=raw.get("ready_service", ""),
         ready_cmd=raw.get("ready_cmd", ""),
         canary=raw.get("canary", ""),
+        wall_clock=wall_clock,
     )
 
 

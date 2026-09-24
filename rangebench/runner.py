@@ -19,7 +19,7 @@ from .agent import (
     is_refusal,
     parse_turn,
 )
-from .env import ATTACKER_IMAGE, EnvError, Task, TaskEnv, truncate_output
+from .env import ATTACKER_IMAGE, EnvError, Task, TaskEnv, truncate_output, wall_clock_default
 
 WRONG_LIMIT = 3
 
@@ -106,6 +106,8 @@ class AttemptResult:
     model_usage: Usage = field(default_factory=Usage)
     compaction_usage: Usage = field(default_factory=Usage)
     wall_s: float = 0.0
+    wall_clock_seconds: int = 0  # effective whole-attempt cap
+    wall_clock_exceeded: bool = False
     end_reason: str = ""
     refusals: int = 0
     stage_flags: dict[str, str] = field(default_factory=dict)  # ground truth read at scoring
@@ -721,6 +723,13 @@ def run_attempt(
     ]
     pending = list(task.stages)
     infra_deadline = t0 + task.infra_timeout * 60
+    # SimpleNamespace test doubles may omit the new field (or tier);
+    # real Tasks always carry both via load_task.
+    wall_clock = getattr(task, "wall_clock", None)
+    if wall_clock is None:
+        wall_clock = wall_clock_default(getattr(task, "tier", 1))
+    res.wall_clock_seconds = wall_clock
+    wall_deadline = t0 + wall_clock
     empty_streak = 0
     previous_prompt_tokens = 0
     previous_estimate = 0
@@ -730,6 +739,17 @@ def run_attempt(
         for turn in range(1, task.turns + 1) if task.turns is not None else itertools.count(1):
             if time.time() > infra_deadline:
                 res.end_reason = "infra timeout"
+                break
+            if time.time() >= wall_deadline:
+                # Whole-attempt cap: checked between turns only, so an
+                # in-flight command always runs to its own cmd_timeout.
+                res.end_reason = "wall_clock_exceeded"
+                res.wall_clock_exceeded = True
+                emit(
+                    "budget",
+                    reason=res.end_reason,
+                    wall_clock_seconds=res.wall_clock_seconds,
+                )
                 break
             # Provider completion tokens include the reasoning-token breakdown.
             total_out = res.completion_tokens + res.compaction_usage.completion_tokens
@@ -934,6 +954,8 @@ def run_attempt(
             refusals=res.refusals,
             turns=res.turns_used,
             wall_s=res.wall_s,
+            wall_clock_seconds=res.wall_clock_seconds,
+            wall_clock_exceeded=res.wall_clock_exceeded,
             ptok=res.prompt_tokens,
             ctok=res.completion_tokens,
             rtok=res.reasoning_tokens,
