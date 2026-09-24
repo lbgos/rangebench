@@ -199,6 +199,7 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(manifest["service_image_fingerprints"][0]["images"], saved["service_image_fingerprints"])
         self.assertFalse(saved["scored"])
         self.assertEqual(saved["end_reason"], "source changed")
+        self.assertEqual(saved["fail_class"], "env_error")
 
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()

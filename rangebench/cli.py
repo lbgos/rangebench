@@ -22,7 +22,9 @@ from .runner import (
     DEFAULT_KEEP_TAIL,
     DEFAULT_RESERVE,
     DEFAULT_THRESHOLD,
+    FAIL_CLASSES,
     MAX_CTX_WINDOW,
+    classify_end_reason,
     run_attempt,
     run_oracle,
 )
@@ -266,6 +268,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             if completed_attempt:
                 doc["tasks"][-1]["scored"] = False
                 doc["tasks"][-1]["end_reason"] = "source changed"
+                doc["tasks"][-1]["fail_class"] = classify_end_reason("source changed", False)
             doc["finished"] = datetime.now(UTC).isoformat()
             if completed_attempt:
                 out.parent.mkdir(parents=True, exist_ok=True)
@@ -298,6 +301,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 attacker_image=attacker_digest,
             )
             usage = res.total_usage()
+            solved = sorted(res.solved) == sorted(s.name for s in task.stages)
             doc["tasks"].append(
                 {
                     "task": task.id,
@@ -306,13 +310,15 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "trial": trial,
                     "solved_stages": res.solved,
                     "stages_total": [s.name for s in task.stages],
-                    "solved": sorted(res.solved) == sorted(s.name for s in task.stages),
+                    "solved": solved,
                     "scored": not (
                         res.end_reason.startswith("env:")
                         or res.end_reason
                         in {"infra timeout", "llm error", "context window exhausted"}
                     ),
+                    "fail_class": classify_end_reason(res.end_reason, solved),
                     "wrong": res.wrong,
+                    "refusals": res.refusals,
                     "turns_used": res.turns_used,
                     "turns_budget": task.turns,
                     "effective_ctx_window": res.effective_ctx_window,
@@ -368,9 +374,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"wrote {out}")
     print(f"wrote {log_dir / 'manifest.json'} and {log_dir / 'report.html'}")
     scored = [t for t in doc["tasks"] if t["scored"]]
-    solved = sum(1 for t in scored if t["solved"])
+    solved_count = sum(1 for t in scored if t["solved"])
     total = len(scored)
-    print(f"tasks solved: {solved}/{total} scored runs ({invalid} invalid)")
+    print(f"tasks solved: {solved_count}/{total} scored runs ({invalid} invalid)")
     from collections import defaultdict
 
     by_cat = defaultdict(list)
@@ -390,8 +396,15 @@ def cmd_run(args: argparse.Namespace) -> None:
         valid = [x for x in lst if x["scored"]]
         s = sum(1 for x in valid if x["solved"])
         print(f"  T{tier} {s}/{len(valid)} ({len(lst) - len(valid)} invalid)")
+    fail_counts = {
+        name: sum(1 for t in doc["tasks"] if t["fail_class"] == name) for name in FAIL_CLASSES
+    }
+    print("failure classes: " + " ".join(f"{name}={fail_counts[name]}" for name in FAIL_CLASSES))
+    refusal_turns = sum(int(t["refusals"]) for t in doc["tasks"])
+    refusing = sum(1 for t in doc["tasks"] if t["refusals"])
+    print(f"refusals: {refusal_turns} turns in {refusing}/{len(doc['tasks'])} attempts")
     if args.trials > 1:
-        p = solved / total if total else 0
+        p = solved_count / total if total else 0
         lo, hi = _wilson(p, total)
         print(f"overall Wilson 95%: {p:.2%} [{lo:.2%}, {hi:.2%}] n={total}")
     toks = [t["completion_tokens"] for t in doc["tasks"]]

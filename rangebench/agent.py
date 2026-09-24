@@ -430,6 +430,35 @@ class AnthropicChatClient:
 ANSWER_RE = re.compile(r"ANSWER:\s*(\S+)", re.IGNORECASE)
 COMMAND_RE = re.compile(r"COMMAND:\s*\n?(.*?)(?=\nANSWER:|\Z)", re.IGNORECASE | re.DOTALL)
 
+# Typed provider finish reasons that already mark a refusal; checked before
+# any text heuristic.
+REFUSAL_FINISH_REASONS = frozenset({"refusal", "content_filter"})
+
+# Narrow fallback: first-person refusal statements. Capability statements
+# ("I cannot reach the host") must not match, so a negated first person must
+# be followed by a help/compliance verb within one sentence.
+_REFUSAL_TEXT_RE = re.compile(
+    r"\bi (?:cannot|can['’]t|won['’]t|will not|am unable to|am not able to)\b"
+    r"[^.!?\n]{0,48}?\b(?:help|assist|comply|fulfill|do that)\b"
+    r"|\bi(?:['’]m| am) sorry\b"
+    r"|\bi apologize\b"
+    r"|against (?:my|the) (?:safety\s+)?(?:policy|guidelines|rules|terms)\b"
+    r"|\brefuse to (?:help|assist|comply|fulfill)\b",
+    re.IGNORECASE,
+)
+
+
+def is_refusal(text: str, metadata: ResponseMetadata | None = None) -> bool:
+    """True when a model turn looks like a safety refusal, not an attempt.
+
+    Uses the typed provider finish reason when available and otherwise a
+    narrow first-person phrase match. Callers count refusals but must never
+    log the matching content.
+    """
+    if metadata is not None and metadata.finish_reason in REFUSAL_FINISH_REASONS:
+        return True
+    return bool(_REFUSAL_TEXT_RE.search(text))
+
 
 def parse_turn(text: str) -> tuple[list[str], list[str]]:
     """Return (commands, answers) extracted from a model turn."""
