@@ -230,7 +230,7 @@ class CompactionTests(unittest.TestCase):
         compacted, tokens, error, api_error = _compact_history_llm(client, messages, 12)
         self.assertIsNone(error)
         self.assertFalse(api_error)
-        self.assertEqual(tokens, 110)
+        self.assertEqual(tokens.prompt_tokens + tokens.completion_tokens, 110)
         self.assertIn("Capture two flags", client.calls[0][1]["content"])
         self.assertIn("TAIL_MARKER", client.calls[0][1]["content"])
         self.assertIn("stage one captured", compacted[2]["content"])
@@ -251,7 +251,7 @@ class CompactionTests(unittest.TestCase):
         self.assertIn("LATE_MARKER", "".join(call[1]["content"] for call in client.calls))
         self.assertIn("EARLY_MARKER", compacted[2]["content"])
         self.assertIn("LATE_MARKER", compacted[2]["content"])
-        self.assertEqual(tokens, 110 * len(client.calls))
+        self.assertEqual(tokens.prompt_tokens + tokens.completion_tokens, 110 * len(client.calls))
         for call, limit in zip(client.calls, client.limits):
             self.assertLess(_estimate_tokens(call) * 2 + limit, 8000)
 
@@ -282,7 +282,7 @@ class CompactionTests(unittest.TestCase):
 
     def test_run_attempt_passes_context_capped_generation_limit(self) -> None:
         class FakeEnv:
-            def __init__(self, task: object, project: str) -> None:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 pass
 
             def up(self) -> None:
@@ -335,12 +335,12 @@ class CompactionTests(unittest.TestCase):
         )
         self.assertEqual(error, "compaction prompt exceeds context window")
         self.assertFalse(api_error)
-        self.assertEqual(tokens, 0)
+        self.assertEqual(tokens.prompt_tokens + tokens.completion_tokens, 0)
         self.assertIn("port 8080 open", compacted[2]["content"])
 
     def test_compaction_api_error_stops_trial_before_next_agent_call(self) -> None:
         class FakeEnv:
-            def __init__(self, task: object, project: str) -> None:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 pass
 
             def up(self) -> None:
@@ -444,7 +444,7 @@ class CompactionTests(unittest.TestCase):
 
     def test_run_attempt_caps_second_turn_by_remaining_output(self) -> None:
         class FakeEnv:
-            def __init__(self, task: object, project: str) -> None:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 pass
 
             def up(self) -> None:
@@ -485,7 +485,7 @@ class CompactionTests(unittest.TestCase):
 
     def test_scoring_records_multiple_flags_beyond_truncated_answer(self) -> None:
         class FakeEnv:
-            def __init__(self, task: object, project: str) -> None:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 pass
 
             def up(self) -> None:
@@ -540,7 +540,7 @@ class CompactionTests(unittest.TestCase):
 
     def test_context_error_retries_same_turn_without_executing_command(self) -> None:
         class FakeEnv:
-            def __init__(self, task: object, project: str) -> None:
+            def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.executions = 0
 
             def up(self) -> None:

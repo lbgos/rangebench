@@ -163,7 +163,11 @@ def cmd_check(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     if args.trials < 1:
         raise SystemExit("--trials must be at least 1")
-    if not 0 < args.ctx_window <= MAX_CTX_WINDOW or args.ctx_window <= args.reserve or args.reserve < 0:
+    if (
+        not 0 < args.ctx_window <= MAX_CTX_WINDOW
+        or args.ctx_window <= args.reserve
+        or args.reserve < 0
+    ):
         raise SystemExit(f"--ctx-window must be above --reserve and at most {MAX_CTX_WINDOW}")
     if args.keep_tail < 0 or not 0 < args.threshold < 1:
         raise SystemExit("--keep-tail must be nonnegative and --threshold must be between 0 and 1")

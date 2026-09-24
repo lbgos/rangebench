@@ -88,16 +88,23 @@ class AccountingTests(unittest.TestCase):
         messages = [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "task"},
-            *({"role": "user", "content": "history " * 30} for _ in range(4)),
+            *(
+                message
+                for _ in range(3)
+                for message in (
+                    {"role": "assistant", "content": "history " * 250},
+                    {"role": "user", "content": "observation"},
+                )
+            ),
         ]
         compacted = _maybe_compact(
             Compactor(),
             messages,
             res,
-            ctx_window=100,
-            reserve=10,
+            ctx_window=3000,
+            reserve=100,
             keep_tail=1,
-            threshold=0.8,
+            threshold=0.3,
             use_llm=True,
             emit=lambda kind, **kv: events.append((kind, kv)),
         )
@@ -161,7 +168,11 @@ class AccountingTests(unittest.TestCase):
     def test_attacker_uses_recorded_image_id(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test", "sha256:recorded")
-        with patch("rangebench.env._run") as run:
+        with (
+            patch("rangebench.env._run") as run,
+            patch.object(env, "_verify_compose_config"),
+            patch.object(env, "verify_isolation"),
+        ):
             env.up()
         docker_run = next(
             call.args[0] for call in run.call_args_list if call.args[0][:2] == ["docker", "run"]
