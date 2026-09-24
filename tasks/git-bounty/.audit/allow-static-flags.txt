@@ -1,0 +1,4 @@
+# Intended static flags (decoys) in this task. Exact flag literals, one per line.
+# The verifier only accepts the real leaked secret from git history.
+# The working-tree placeholder is an expired distractor per task statement.
+flag{0000-old-rotated-do-not-use-0000}
