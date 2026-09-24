@@ -379,8 +379,16 @@ class CompactionTests(unittest.TestCase):
         client = FailingCompactionClient()
         with TemporaryDirectory() as directory, patch("rangebench.runner.TaskEnv", FakeEnv):
             result = run_attempt(
-                client, task, 1, "test", Path(directory), verbose=False,
-                ctx_window=5000, keep_tail=1, threshold=0.5, use_llm_compact=True,
+                client,
+                task,
+                1,
+                "test",
+                Path(directory),
+                verbose=False,
+                ctx_window=5000,
+                keep_tail=1,
+                threshold=0.5,
+                use_llm_compact=True,
             )
         self.assertEqual(result.end_reason, "llm error")
         self.assertEqual(result.compaction_tokens, 100)
@@ -580,6 +588,7 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 2)
         self.assertEqual(result.turns_used, 1)
         self.assertEqual(result.commands, 0)
+        self.assertEqual(result.effective_ctx_window, 25000)
         self.assertLess(client.limits[1], client.limits[0])
 
 

@@ -316,7 +316,7 @@ class AccountingTests(unittest.TestCase):
             compact="deterministic",
             keep=False,
         )
-        result = AttemptResult(task.id, 1, end_reason="llm error")
+        result = AttemptResult(task.id, 1, effective_ctx_window=64000, end_reason="llm error")
         result.model_usage.add(
             {
                 "prompt_tokens": 100,
@@ -350,6 +350,7 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(run_attempt.call_args.kwargs["attacker_image"], "sha256:test")
             saved = json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]
             self.assertFalse(saved["scored"])
+            self.assertEqual(saved["effective_ctx_window"], 64000)
             self.assertEqual((saved["input_tokens"], saved["output_tokens"]), (120, 45))
             self.assertEqual(saved["cache_read_tokens"], 60)
             self.assertEqual(saved["compaction_cache_read_tokens"], 0)

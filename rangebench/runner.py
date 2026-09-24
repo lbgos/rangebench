@@ -40,6 +40,7 @@ DEFAULT_THRESHOLD = 0.82
 class AttemptResult:
     task_id: str
     trial: int
+    effective_ctx_window: int | None = None
     solved: list[str] = field(default_factory=list)  # stage names
     wrong: int = 0
     turns_used: int = 0
@@ -442,7 +443,7 @@ def run_attempt(
     attacker_image: str = ATTACKER_IMAGE,
 ) -> AttemptResult:
     ctx_window = min(ctx_window, MAX_CTX_WINDOW)
-    res = AttemptResult(task_id=task.id, trial=trial)
+    res = AttemptResult(task_id=task.id, trial=trial, effective_ctx_window=ctx_window)
     env = TaskEnv(task, project, attacker_image)
     t0 = time.time()
     log_path = log_dir / f"{task.id}-t{trial}.jsonl"
@@ -543,6 +544,7 @@ def run_attempt(
                 res.reasoning_tokens += usage.reasoning_tokens
                 if err and _is_context_length_error(err) and retry < 8 and ctx_window > 256:
                     ctx_window = max(256, ctx_window // 2)
+                    res.effective_ctx_window = ctx_window
                     emit("context-retry", error=err, ctx_window=ctx_window)
                     continue
                 if err:

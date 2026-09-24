@@ -266,6 +266,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "wrong": res.wrong,
                     "turns_used": res.turns_used,
                     "turns_budget": task.turns,
+                    "effective_ctx_window": res.effective_ctx_window,
                     "commands": res.commands,
                     "prompt_tokens": res.prompt_tokens,
                     "completion_tokens": res.completion_tokens,
