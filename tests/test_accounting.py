@@ -67,6 +67,33 @@ class AccountingTests(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertEqual((usage.input_reported_calls, usage.output_reported_calls), (1, 1))
 
+            for malformed in (True, -1, "12", 1.5, None):
+                with self.subTest(client=type(client).__name__, malformed=malformed):
+                    body["usage"] = {input_key: malformed, output_key: 0}
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ) as urlopen:
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(
+                        error,
+                        f"malformed token usage: {input_key} must be a non-negative integer",
+                    )
+                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (1, 1, 1))
+                    urlopen.assert_called_once()
+
+        usage = Usage()
+        with self.assertRaisesRegex(ValueError, "prompt_tokens_details.cached_tokens"):
+            usage.add(
+                {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": True},
+                }
+            )
+
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()
         usage.add(

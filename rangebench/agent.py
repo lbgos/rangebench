@@ -35,6 +35,10 @@ If a task has multiple stages, submit each flag as soon as you capture it (one A
 """.strip()
 
 
+class TokenUsageError(ValueError):
+    """The API supplied a token count that cannot be used for accounting."""
+
+
 @dataclass
 class Usage:
     prompt_tokens: int = 0
@@ -55,6 +59,37 @@ class Usage:
         if not isinstance(other, dict):
             return
         self.reported_calls += 1
+        token_fields = (
+            "prompt_tokens",
+            "input_tokens",
+            "completion_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+        )
+        for key in token_fields:
+            if key in other and (type(other[key]) is not int or other[key] < 0):
+                raise TokenUsageError(
+                    f"malformed token usage: {key} must be a non-negative integer"
+                )
+        for details_key in (
+            "prompt_tokens_details",
+            "input_tokens_details",
+            "completion_tokens_details",
+            "output_tokens_details",
+        ):
+            details = other.get(details_key)
+            if details is None:
+                continue
+            if not isinstance(details, dict):
+                raise TokenUsageError(f"malformed token usage: {details_key} must be an object")
+            for key in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
+                if key in details and (type(details[key]) is not int or details[key] < 0):
+                    raise TokenUsageError(
+                        f"malformed token usage: {details_key}.{key} must be a non-negative integer"
+                    )
         prompt_details = other.get("prompt_tokens_details") or {}
         input_details = other.get("input_tokens_details") or {}
         output_details = other.get("completion_tokens_details") or {}
@@ -190,6 +225,8 @@ class ChatClient:
                 if not content.strip() and reasoning:
                     content = ""
                 return content, usage, None
+            except TokenUsageError as exc:
+                return "", usage, str(exc)
             except urllib.error.HTTPError as exc:
                 detail = ""
                 with contextlib.suppress(Exception):
@@ -263,6 +300,8 @@ class AnthropicChatClient:
                     if isinstance(b, dict) and b.get("type") == "text":
                         text += b.get("text") or ""
                 return text, usage, None
+            except TokenUsageError as exc:
+                return "", usage, str(exc)
             except urllib.error.HTTPError as exc:
                 detail = ""
                 with contextlib.suppress(Exception):
