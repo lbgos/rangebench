@@ -117,6 +117,9 @@ class TaskEnv:
             str(self.task.dir / self.task.compose),
         ]
         self._verify_compose_config(compose)
+        # Reused project names must not carry old flags or readiness markers.
+        _run(["docker", "rm", "-f", self.attacker], check=False, timeout=60)
+        _run(compose + ["down", "-v", "--remove-orphans"], timeout=300)
         _run(compose + (["up", "-d", "--build"] if build else ["up", "-d"]), timeout=1800)
         if self.task.ready_service:
             deadline = time.time() + 180
