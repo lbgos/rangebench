@@ -174,6 +174,60 @@ class WallClockTests(unittest.TestCase):
         self.assertEqual(result.commands, 1)
         self.assertEqual(envs[-1].seen_timeouts, [120])
 
+    def test_env_setup_failure_retains_wall_clock_cap(self) -> None:
+        class FailingEnv(FakeEnv):
+            def up(self) -> None:
+                raise EnvError("boom")
+
+        with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", FailingEnv):
+            task = Task(
+                "sample",
+                Path(tmp),
+                "web",
+                1,
+                "Find the flag",
+                stages=[Stage("one", "/flag", "target")],
+                wall_clock=42,
+            )
+            result = run_attempt(NoCallsClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+        self.assertTrue(result.end_reason.startswith("env:"))
+        self.assertEqual(result.wall_clock_seconds, 42)
+        self.assertFalse(result.wall_clock_exceeded)
+
+    def test_final_finite_turn_past_deadline_reports_wall_clock(self) -> None:
+        now = [1000.0]
+
+        def fake_time() -> float:
+            return now[0]
+
+        base_exec = FakeEnv.exec
+
+        def advancing_exec(self: FakeEnv, cmd: str, **kwargs: object) -> tuple[int, str]:
+            now[0] += 120.0  # the only turn runs past the 60s wall clock
+            return base_exec(self, cmd, **kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("rangebench.runner.TaskEnv", FakeEnv),
+            patch.object(FakeEnv, "exec", advancing_exec),
+            patch("rangebench.runner.time.time", side_effect=fake_time),
+        ):
+            task = Task(
+                "sample",
+                Path(tmp),
+                "web",
+                1,
+                "Find the flag",
+                stages=[Stage("one", "/flag", "target")],
+                turns=1,
+                cmd_timeout=120,
+                wall_clock=60,
+            )
+            result = run_attempt(LoopClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+        self.assertEqual(result.end_reason, "wall_clock_exceeded")
+        self.assertTrue(result.wall_clock_exceeded)
+        self.assertEqual(result.wall_clock_seconds, 60)
+
     def test_wall_clock_trip_stays_scored(self) -> None:
         task = Task(
             "sample", Path("/tmp"), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "web")]

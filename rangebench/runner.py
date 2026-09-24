@@ -669,6 +669,13 @@ def run_attempt(
     res = AttemptResult(task_id=task.id, trial=trial, effective_ctx_window=ctx_window)
     env = TaskEnv(task, project, attacker_image)
     t0 = time.time()
+    # SimpleNamespace test doubles may omit the new field (or tier);
+    # real Tasks always carry both via load_task. Resolve before env
+    # setup so EnvError failures retain the effective cap in the summary.
+    wall_clock = getattr(task, "wall_clock", None)
+    if wall_clock is None:
+        wall_clock = wall_clock_default(getattr(task, "tier", 1))
+    res.wall_clock_seconds = wall_clock
     log_path = log_dir / f"{task.id}-t{trial}.jsonl"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = log_path.open("w", encoding="utf-8")
@@ -723,12 +730,6 @@ def run_attempt(
     ]
     pending = list(task.stages)
     infra_deadline = t0 + task.infra_timeout * 60
-    # SimpleNamespace test doubles may omit the new field (or tier);
-    # real Tasks always carry both via load_task.
-    wall_clock = getattr(task, "wall_clock", None)
-    if wall_clock is None:
-        wall_clock = wall_clock_default(getattr(task, "tier", 1))
-    res.wall_clock_seconds = wall_clock
     wall_deadline = t0 + wall_clock
     empty_streak = 0
     previous_prompt_tokens = 0
@@ -941,7 +942,18 @@ def run_attempt(
                 )
 
         else:
-            res.end_reason = res.end_reason or "turn budget"
+            if time.time() >= wall_deadline:
+                # The final finite turn ran past the cap; no next
+                # iteration remains for the between-turns check above.
+                res.end_reason = "wall_clock_exceeded"
+                res.wall_clock_exceeded = True
+                emit(
+                    "budget",
+                    reason=res.end_reason,
+                    wall_clock_seconds=res.wall_clock_seconds,
+                )
+            else:
+                res.end_reason = res.end_reason or "turn budget"
     finally:
         res.wall_s = round(time.time() - t0, 1)
         if keep:
