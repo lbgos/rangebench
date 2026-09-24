@@ -31,7 +31,8 @@ services:
     volumes:
       - token:/etc/portal:ro
 networks:
-  default: {}
+  default:
+    internal: true
   core:
     internal: true
 volumes:

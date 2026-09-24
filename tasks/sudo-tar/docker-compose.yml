@@ -7,3 +7,6 @@ services:
         soft: 1073741824
         hard: 1073741824
     build: .
+networks:
+  default:
+    internal: true

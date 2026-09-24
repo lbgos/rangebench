@@ -39,5 +39,6 @@ build-job:
 EOF
 git add -A && git commit -qm "rotate runner token, drop runner.env"
 git update-server-info
+printf 'ready\n' > .git/rangebench-ready
 echo "seeded: legacy=reg_$LEGACY"
 sleep infinity

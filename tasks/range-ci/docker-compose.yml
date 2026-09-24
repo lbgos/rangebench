@@ -28,7 +28,8 @@ services:
     volumes:
       - share:/share:ro
 networks:
-  default: {}
+  default:
+    internal: true
   core:
     internal: true
 volumes:

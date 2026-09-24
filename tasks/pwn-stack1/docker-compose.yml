@@ -11,3 +11,6 @@ services:
       - bin:/binshare
 volumes:
   bin: {}
+networks:
+  default:
+    internal: true

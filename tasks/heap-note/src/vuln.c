@@ -6,7 +6,7 @@
 #define MAXN 16
 
 /* UAF on delete (pointer not cleared, edit/show still reach the chunk).
- * Menu option 5 calls g_dispatch. Fresh glibc: tcache fd is mangled
+ * Menu option 5 calls g_box.f. Fresh glibc: tcache fd is mangled
  * (PROTECT_PTR), so the leak from show() gives heap>>12 and the poisoned
  * fd must be re-mangled by hand. */
 struct note {
