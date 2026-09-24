@@ -106,6 +106,7 @@ class TaxonomyTests(unittest.TestCase):
             ("output token budget", False, FAIL_BUDGET),
             ("infra timeout", False, FAIL_BUDGET),
             ("context window exhausted", False, FAIL_BUDGET),
+            ("wall_clock_exceeded", False, FAIL_BUDGET),
             ("", False, FAIL_NORMAL),
             ("a future, unknown ending", False, FAIL_NORMAL),
         ]
@@ -255,6 +256,8 @@ class RunSummaryTests(unittest.TestCase):
         "compaction_cache_read_tokens",
         "compaction_cache_write_tokens",
         "wall_s",
+        "wall_clock_seconds",
+        "wall_clock_exceeded",
         "end_reason",
         "max_output_tokens",
     }

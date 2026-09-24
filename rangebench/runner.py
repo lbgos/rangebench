@@ -43,7 +43,13 @@ _ENV_REASONS = frozenset({"source changed"})
 _PROVIDER_REASONS = frozenset({"llm error"})
 _PROTOCOL_REASONS = frozenset({"too many wrong submissions", "model produced no content 11x"})
 _BUDGET_REASONS = frozenset(
-    {"turn budget", "output token budget", "infra timeout", "context window exhausted"}
+    {
+        "turn budget",
+        "output token budget",
+        "infra timeout",
+        "context window exhausted",
+        "wall_clock_exceeded",
+    }
 )
 
 
