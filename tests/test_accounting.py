@@ -1,4 +1,5 @@
 import argparse
+import errno
 import json
 import tempfile
 import subprocess
@@ -15,7 +16,15 @@ from rangebench.cli import (
     cmd_preflight,
     cmd_run,
 )
-from rangebench.env import EnvError, Stage, Task, TaskEnv, _run, image_content_fingerprint
+from rangebench.env import (
+    MAX_COMMAND_BYTES,
+    EnvError,
+    Stage,
+    Task,
+    TaskEnv,
+    _run,
+    image_content_fingerprint,
+)
 from rangebench.runner import AttemptResult, _maybe_compact
 
 
@@ -393,6 +402,40 @@ class AccountingTests(unittest.TestCase):
 
         with patch("rangebench.env.subprocess.run", side_effect=binary_output):
             self.assertEqual(env.exec("cat binary-file"), (0, "out\ufffd\n[stderr]\nerr\ufffd"))
+
+    def test_oversized_utf8_command_is_scored_without_spawning_docker(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        command = "é" * (MAX_COMMAND_BYTES // 2 + 1)
+        with patch("rangebench.env.subprocess.run") as run:
+            rc, output = env.exec(command)
+        self.assertEqual(rc, 1)
+        self.assertIn("exceeds", output)
+        self.assertNotIn(command[:20], output)
+        run.assert_not_called()
+
+    def test_invalid_utf8_command_is_scored_without_spawning_docker(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        with patch("rangebench.env.subprocess.run") as run:
+            self.assertEqual(env.exec("echo \udcff"), (1, "[command contains invalid UTF-8]"))
+        run.assert_not_called()
+
+    def test_e2big_from_subprocess_is_scored_without_command_content(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        with patch("rangebench.env.subprocess.run", side_effect=OSError(errno.E2BIG, "too long")):
+            self.assertEqual(
+                env.exec("private-model-command"),
+                (1, "[command could not start: argument list too long]"),
+            )
+
+    def test_other_subprocess_start_error_invalidates_attempt(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        with patch("rangebench.env.subprocess.run", side_effect=OSError(errno.ENOENT, "missing")):
+            with self.assertRaisesRegex(EnvError, "Docker exec could not start"):
+                env.exec("echo ok")
 
     def test_attacker_uses_recorded_image_id(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")

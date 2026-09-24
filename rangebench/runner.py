@@ -539,7 +539,9 @@ def run_attempt(
 
     def emit(kind: str, **kv: Any) -> None:
         rec: dict[str, Any] = {"t": round(time.time() - t0, 1), "kind": kind, **kv}
-        log.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Model output may contain lone Unicode surrogates. Escape them so a
+        # malformed command can receive an ordinary observation below.
+        log.write(json.dumps(rec, ensure_ascii=True) + "\n")
         log.flush()
 
     try:
