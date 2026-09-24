@@ -285,7 +285,7 @@ class CompactionTests(unittest.TestCase):
     def test_run_attempt_passes_context_capped_generation_limit(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
@@ -433,7 +433,7 @@ class CompactionTests(unittest.TestCase):
     def test_compaction_api_error_stops_trial_before_next_agent_call(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
@@ -553,7 +553,7 @@ class CompactionTests(unittest.TestCase):
     def test_output_cap_retry_keeps_context_window(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
@@ -601,7 +601,7 @@ class CompactionTests(unittest.TestCase):
     def test_run_attempt_caps_second_turn_by_remaining_output(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
@@ -642,7 +642,7 @@ class CompactionTests(unittest.TestCase):
     def test_scoring_records_multiple_flags_beyond_truncated_answer(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
@@ -697,6 +697,7 @@ class CompactionTests(unittest.TestCase):
     def test_context_error_retries_same_turn_without_executing_command(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
+                self.service_image_ids = {"target": "sha256:test"}
                 self.executions = 0
 
             def up(self) -> None:
