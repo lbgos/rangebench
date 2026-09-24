@@ -146,8 +146,8 @@ class TaskEnv:
         for net in self.task.attacker_networks:
             full = net if "_" in net else f"{self.project}_{net}"
             nets.append(full)
-        self.verify_isolation(nets)
         self.service_image_ids = self.inspect_service_images(compose, services)
+        self.verify_isolation(nets)
         vol_args: list[str] = []
         for v in self.task.shared_volumes:
             name, _, dest = v.partition(":")
