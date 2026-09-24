@@ -35,6 +35,10 @@ If a task has multiple stages, submit each flag as soon as you capture it (one A
 """.strip()
 
 
+class TokenUsageError(ValueError):
+    """The API supplied a token count that cannot be used for accounting."""
+
+
 @dataclass
 class Usage:
     prompt_tokens: int = 0
@@ -51,18 +55,71 @@ class Usage:
     cache_write_reported_calls: int = 0
 
     def add(self, other: dict | None, *, provider: str = "openai") -> None:
-        self.calls += 1
         if not isinstance(other, dict):
+            self.calls += 1
             return
-        self.reported_calls += 1
+        token_fields = (
+            "prompt_tokens",
+            "input_tokens",
+            "completion_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens",
+        )
+        for key in token_fields:
+            if key in other and (type(other[key]) is not int or other[key] < 0):
+                raise TokenUsageError(
+                    f"malformed token usage: {key} must be a non-negative integer"
+                )
+        for details_key in (
+            "prompt_tokens_details",
+            "input_tokens_details",
+            "completion_tokens_details",
+            "output_tokens_details",
+        ):
+            details = other.get(details_key)
+            if details is None:
+                continue
+            if not isinstance(details, dict):
+                raise TokenUsageError(f"malformed token usage: {details_key} must be an object")
+            for key in ("cached_tokens", "cache_write_tokens", "reasoning_tokens"):
+                if key in details and (type(details[key]) is not int or details[key] < 0):
+                    raise TokenUsageError(
+                        f"malformed token usage: {details_key}.{key} must be a non-negative integer"
+                    )
         prompt_details = other.get("prompt_tokens_details") or {}
         input_details = other.get("input_tokens_details") or {}
         output_details = other.get("completion_tokens_details") or {}
         if not output_details:
             output_details = other.get("output_tokens_details") or {}
-        if "prompt_tokens" in other or "input_tokens" in other:
+        completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
+        if provider != "anthropic" and "total_tokens" in other:
+            reported_input = int(other.get("prompt_tokens") or other.get("input_tokens") or 0)
+            total = other["total_tokens"]
+            if total < reported_input + completion:
+                raise TokenUsageError(
+                    "malformed token usage: total_tokens is below input plus output"
+                )
+            completion = max(completion, total - reported_input)
+        self.calls += 1
+        self.reported_calls += 1
+        has_input = (
+            other.get("input_tokens") is not None
+            if provider == "anthropic"
+            else other.get("prompt_tokens") is not None or other.get("input_tokens") is not None
+        )
+        has_output = (
+            other.get("output_tokens") is not None
+            if provider == "anthropic"
+            else other.get("completion_tokens") is not None
+            or other.get("output_tokens") is not None
+        )
+        if has_input:
             self.input_reported_calls += 1
-        if "completion_tokens" in other or "output_tokens" in other:
+        if has_output:
             self.output_reported_calls += 1
         if provider == "anthropic":
             read = other.get("cache_read_input_tokens")
@@ -92,7 +149,6 @@ class Usage:
         )
         # OpenAI completion_tokens already includes reasoning_tokens. Keep the
         # latter as a breakdown, not an additional charge against the budget.
-        completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
         self.completion_tokens += max(completion, reasoning)
         self.reasoning_tokens += reasoning
 
@@ -175,6 +231,11 @@ class ChatClient:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
                 usage.add(body.get("usage"))
+                if (
+                    usage.input_reported_calls < usage.calls
+                    or usage.output_reported_calls < usage.calls
+                ):
+                    return "", usage, "missing input or output token usage"
                 choice = (body.get("choices") or [{}])[0]
                 msg = choice.get("message") or {}
                 content = msg.get("content")
@@ -185,6 +246,8 @@ class ChatClient:
                 if not content.strip() and reasoning:
                     content = ""
                 return content, usage, None
+            except TokenUsageError as exc:
+                return "", usage, str(exc)
             except urllib.error.HTTPError as exc:
                 detail = ""
                 with contextlib.suppress(Exception):
@@ -247,12 +310,19 @@ class AnthropicChatClient:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     body = json.loads(resp.read().decode())
                 usage.add(body.get("usage"), provider="anthropic")
+                if (
+                    usage.input_reported_calls < usage.calls
+                    or usage.output_reported_calls < usage.calls
+                ):
+                    return "", usage, "missing input or output token usage"
                 content_blocks = body.get("content") or []
                 text = ""
                 for b in content_blocks:
                     if isinstance(b, dict) and b.get("type") == "text":
                         text += b.get("text") or ""
                 return text, usage, None
+            except TokenUsageError as exc:
+                return "", usage, str(exc)
             except urllib.error.HTTPError as exc:
                 detail = ""
                 with contextlib.suppress(Exception):

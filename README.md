@@ -14,7 +14,7 @@ I run it on my own hardware against any OpenAI compatible endpoint.
 | T4 | heap-note, pwn-orw, java-rev, padding-oracle, range-ci | 200 |
 | T5 | range-corp, range-dind | 300 |
 
-Per-turn limit is 32k tokens.
+Per-turn limit is 32k tokens, reduced when a smaller model context window leaves less room. The harness context ceiling is 258k tokens; pass `--ctx-window` for models with a smaller window.
 
 ## how it runs
 
@@ -22,7 +22,7 @@ The model gets one `COMMAND:` per turn and sees the `OBSERVATION` back. It submi
 
 Each attempt starts a fresh compose project and a fresh attacker container on the task network. The attacker has nmap, curl, pwntools, gdb, and the usual tools.
 
-History compaction happens near the context window. The harness keeps the last 12 turns verbatim and summarizes the middle with the same model.
+History compaction happens before the model context limit. The harness keeps up to the last 12 turns verbatim and summarizes all earlier history in bounded chunks with the same model. Confirmed stages and submitted flags stay in a separate memory block across repeated compactions. Summary calls are recorded as `compaction_tokens`. A context-length error halves the working window and retries the model turn without repeating its shell command.
 
 ## quickstart
 

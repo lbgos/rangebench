@@ -6,13 +6,109 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rangebench.agent import Usage
+from rangebench.agent import AnthropicChatClient, ChatClient, Usage
 from rangebench.cli import _get_git_commit, _get_task_set_hash, cmd_preflight, cmd_run
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
 from rangebench.runner import AttemptResult, _maybe_compact
 
 
 class AccountingTests(unittest.TestCase):
+    def test_missing_token_usage_invalidates_successful_response(self) -> None:
+        class Response:
+            def __init__(self, body: dict):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.body).encode()
+
+        cases = (
+            (
+                ChatClient("http://localhost/v1", "key", "test"),
+                "prompt_tokens",
+                "completion_tokens",
+                {"choices": [{"message": {"content": "ANSWER: flag{test}"}}]},
+            ),
+            (
+                AnthropicChatClient("http://localhost", "key", "test"),
+                "input_tokens",
+                "output_tokens",
+                {"content": [{"type": "text", "text": "ANSWER: flag{test}"}]},
+            ),
+        )
+        for client, input_key, output_key, body in cases:
+            for missing_key in (input_key, output_key):
+                with self.subTest(client=type(client).__name__, missing=missing_key):
+                    body["usage"] = {input_key: 0, output_key: 0}
+                    del body["usage"][missing_key]
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ) as urlopen:
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(error, "missing input or output token usage")
+                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (1, 1, 1))
+                    self.assertEqual(usage.input_reported_calls, int(missing_key != input_key))
+                    self.assertEqual(usage.output_reported_calls, int(missing_key != output_key))
+                    urlopen.assert_called_once()
+
+            if isinstance(client, AnthropicChatClient):
+                with self.subTest(client="AnthropicChatClient", foreign_usage_fields=True):
+                    body["usage"] = {"prompt_tokens": 10, "completion_tokens": 10}
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ):
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(error, "missing input or output token usage")
+                    self.assertEqual(
+                        (usage.input_reported_calls, usage.output_reported_calls), (0, 0)
+                    )
+
+            with self.subTest(client=type(client).__name__, zero_usage=True):
+                body["usage"] = {input_key: 0, output_key: 0}
+                with patch("rangebench.agent.urllib.request.urlopen", return_value=Response(body)):
+                    content, usage, error = client.chat([{"role": "user", "content": "test"}], 10)
+                self.assertIn("ANSWER:", content)
+                self.assertIsNone(error)
+                self.assertEqual((usage.input_reported_calls, usage.output_reported_calls), (1, 1))
+
+            for malformed in (True, -1, "12", 1.5, None):
+                with self.subTest(client=type(client).__name__, malformed=malformed):
+                    body["usage"] = {input_key: malformed, output_key: 0}
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ) as urlopen:
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(
+                        error,
+                        f"malformed token usage: {input_key} must be a non-negative integer",
+                    )
+                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (0, 1, 0))
+                    urlopen.assert_called_once()
+
+        usage = Usage()
+        with self.assertRaisesRegex(ValueError, "prompt_tokens_details.cached_tokens"):
+            usage.add(
+                {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": True},
+                }
+            )
+
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()
         usage.add(
@@ -24,6 +120,38 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual(usage.completion_tokens, 40)
         self.assertEqual(usage.reasoning_tokens, 30)
+
+    def test_total_tokens_covers_split_reasoning_output(self) -> None:
+        usage = Usage()
+        usage.add(
+            {
+                "prompt_tokens": 4,
+                "completion_tokens": 2,
+                "total_tokens": 76,
+                "completion_tokens_details": {"reasoning_tokens": 70},
+            }
+        )
+        self.assertEqual(
+            (usage.input_tokens, usage.output_tokens, usage.reasoning_tokens), (4, 72, 70)
+        )
+
+        nested = Usage()
+        nested.add(
+            {
+                "prompt_tokens": 55,
+                "completion_tokens": 37,
+                "total_tokens": 92,
+                "completion_tokens_details": {"reasoning_tokens": 34},
+            }
+        )
+        self.assertEqual((nested.input_tokens, nested.output_tokens), (55, 37))
+
+        for total in (True, -1, 5, "76"):
+            with self.subTest(total=total):
+                invalid = Usage()
+                with self.assertRaisesRegex(ValueError, "total_tokens"):
+                    invalid.add({"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": total})
+                self.assertEqual(invalid.as_dict(), Usage().as_dict())
 
     def test_openai_cache_and_missing_metadata_are_distinct(self) -> None:
         usage = Usage()
@@ -88,16 +216,23 @@ class AccountingTests(unittest.TestCase):
         messages = [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "task"},
-            *({"role": "user", "content": "history " * 30} for _ in range(4)),
+            *(
+                message
+                for _ in range(3)
+                for message in (
+                    {"role": "assistant", "content": "history " * 250},
+                    {"role": "user", "content": "observation"},
+                )
+            ),
         ]
         compacted = _maybe_compact(
             Compactor(),
             messages,
             res,
-            ctx_window=100,
-            reserve=10,
+            ctx_window=3000,
+            reserve=100,
             keep_tail=1,
-            threshold=0.8,
+            threshold=0.3,
             use_llm=True,
             emit=lambda kind, **kv: events.append((kind, kv)),
         )
@@ -161,7 +296,11 @@ class AccountingTests(unittest.TestCase):
     def test_attacker_uses_recorded_image_id(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
         env = TaskEnv(task, "rb-test", "sha256:recorded")
-        with patch("rangebench.env._run") as run:
+        with (
+            patch("rangebench.env._run") as run,
+            patch.object(env, "_verify_compose_config"),
+            patch.object(env, "verify_isolation"),
+        ):
             env.up()
         docker_run = next(
             call.args[0] for call in run.call_args_list if call.args[0][:2] == ["docker", "run"]
@@ -251,7 +390,8 @@ class AccountingTests(unittest.TestCase):
             compact="deterministic",
             keep=False,
         )
-        result = AttemptResult(task.id, 1, end_reason="llm error")
+        result = AttemptResult(task.id, 1, effective_ctx_window=64000, end_reason="llm error")
+        result.compaction_fallbacks = 1
         result.model_usage.add(
             {
                 "prompt_tokens": 100,
@@ -285,13 +425,26 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(run_attempt.call_args.kwargs["attacker_image"], "sha256:test")
             saved = json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]
             self.assertFalse(saved["scored"])
+            self.assertEqual(saved["effective_ctx_window"], 64000)
+            self.assertEqual(saved["compaction_fallbacks"], 1)
             self.assertEqual((saved["input_tokens"], saved["output_tokens"]), (120, 45))
             self.assertEqual(saved["cache_read_tokens"], 60)
             self.assertEqual(saved["compaction_cache_read_tokens"], 0)
             self.assertIsNone(saved["cache_write_tokens"])
             self.assertEqual(saved["cache_read_reported_calls"], 2)
             manifest = next(Path(tmp).glob("*/manifest.json"))
-            self.assertEqual(json.loads(manifest.read_text())["status"], "completed_with_errors")
+            manifest_data = json.loads(manifest.read_text())
+            self.assertEqual(manifest_data["status"], "completed_with_errors")
+            self.assertEqual(
+                manifest_data["usage_coverage"],
+                {
+                    "api_calls": 2,
+                    "api_requests": 0,
+                    "usage_reported_calls": 2,
+                    "input_reported_calls": 2,
+                    "output_reported_calls": 2,
+                },
+            )
 
     def test_preflight_stops_if_attacker_build_fails(self) -> None:
         with (
