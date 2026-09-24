@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rangebench.agent import AnthropicChatClient, ChatClient, Usage
-from rangebench.cli import _get_git_commit, _get_task_set_hash, _write_manifest, cmd_preflight, cmd_run
+from rangebench.cli import (
+    _get_git_commit,
+    _get_task_set_hash,
+    _write_manifest,
+    cmd_preflight,
+    cmd_run,
+)
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
 from rangebench.runner import AttemptResult, _maybe_compact
 
@@ -119,7 +125,9 @@ class AccountingTests(unittest.TestCase):
             with (
                 patch("rangebench.cli._get_git_commit", side_effect=AssertionError("recomputed")),
                 patch("rangebench.cli._get_harness_hash", side_effect=AssertionError("recomputed")),
-                patch("rangebench.cli._get_task_set_hash", side_effect=AssertionError("recomputed")),
+                patch(
+                    "rangebench.cli._get_task_set_hash", side_effect=AssertionError("recomputed")
+                ),
             ):
                 _write_manifest(Path(tmp), {**fingerprint, "tasks": []}, {"status": "running"})
                 _write_manifest(Path(tmp), {**fingerprint, "tasks": []}, {"status": "completed"})
@@ -155,16 +163,28 @@ class AccountingTests(unittest.TestCase):
                 patch("rangebench.cli.load_task", return_value=task),
                 patch("rangebench.cli.ChatClient"),
                 patch("rangebench.cli._get_attacker_digest", return_value="sha256:test"),
-                patch("rangebench.cli._source_fingerprint", side_effect=[first, first, first, changed]),
-                patch("rangebench.cli.run_attempt", return_value=AttemptResult(task.id, 1)) as attempt,
+                patch(
+                    "rangebench.cli._source_fingerprint", side_effect=[first, first, first, changed]
+                ),
+                patch(
+                    "rangebench.cli.run_attempt",
+                    return_value=AttemptResult(
+                        task.id, 1, service_image_ids={"api": "sha256:" + "a" * 64}
+                    ),
+                ) as attempt,
             ):
                 with self.assertRaisesRegex(SystemExit, "source changed"):
                     cmd_run(args)
             self.assertEqual(attempt.call_count, 1)
             manifest = json.loads(next(Path(tmp).glob("*/manifest.json")).read_text())
+            saved = json.loads((Path(tmp) / "latest.json").read_text())["tasks"][0]
         self.assertEqual(manifest["status"], "source_changed")
         self.assertEqual(manifest["task_set_hash"], first["task_set_hash"])
         self.assertEqual(manifest["observed_source"], changed)
+        self.assertEqual(manifest["task_count"], 1)
+        self.assertEqual(manifest["service_image_ids"][0]["images"], saved["service_image_ids"])
+        self.assertFalse(saved["scored"])
+        self.assertEqual(saved["end_reason"], "source changed")
 
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()
@@ -379,7 +399,9 @@ class AccountingTests(unittest.TestCase):
         with patch("rangebench.env._run", side_effect=responses) as run:
             images = env.inspect_service_images(["docker", "compose"], ["api", "db"])
         self.assertEqual(images, {"api": digest, "db": digest})
-        self.assertEqual(run.call_args.args[0], ["docker", "inspect", "--format", "{{.Image}}", "container-2"])
+        self.assertEqual(
+            run.call_args.args[0], ["docker", "inspect", "--format", "{{.Image}}", "container-2"]
+        )
 
         with patch("rangebench.env._run", return_value=subprocess.CompletedProcess([], 0, "", "")):
             with self.assertRaisesRegex(EnvError, "no container for service api"):

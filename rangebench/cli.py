@@ -244,10 +244,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     # Fail before spending model calls if the manifest cannot be recorded.
     _write_manifest(log_dir, doc, extra={"status": "running"})
 
-    def verify_source() -> None:
+    def verify_source(completed_attempt: bool = False) -> None:
         current = _source_fingerprint()
         if current != source_fingerprint:
+            if completed_attempt:
+                doc["tasks"][-1]["scored"] = False
+                doc["tasks"][-1]["end_reason"] = "source changed"
             doc["finished"] = datetime.now(UTC).isoformat()
+            if completed_attempt:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(doc, indent=2))
+                (RESULTS / "latest.json").write_text(json.dumps(doc, indent=2))
             _write_manifest(
                 log_dir, doc, extra={"status": "source_changed", "observed_source": current}
             )
@@ -274,7 +281,6 @@ def cmd_run(args: argparse.Namespace) -> None:
                 use_llm_compact=use_llm,
                 attacker_image=attacker_digest,
             )
-            verify_source()
             usage = res.total_usage()
             doc["tasks"].append(
                 {
@@ -321,6 +327,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "max_output_tokens": task.max_output_tokens,
                 }
             )
+            verify_source(completed_attempt=True)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(doc, indent=2))
             (RESULTS / "latest.json").write_text(json.dumps(doc, indent=2))
