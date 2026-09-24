@@ -22,6 +22,8 @@ The model gets one `COMMAND:` per turn and sees the `OBSERVATION` back. It submi
 
 Each attempt starts a fresh compose project and a fresh attacker container on the task network. The attacker has nmap, curl, pwntools, gdb, and the usual tools.
 
+Each attempt also has a wall-clock cap covering the whole run: 600s for T1/T2, 1200s for T3, 1800s for T4/T5, unless the task sets its own `wall_clock` seconds in task.json. The cap is checked between turns, so a running command always finishes under its own timeout; when the cap trips the attempt ends as `wall_clock_exceeded` and stays scored.
+
 History compaction happens before the model context limit. The harness keeps up to the last 12 turns verbatim and summarizes all earlier history in bounded chunks with the same model. Confirmed stages and submitted flags stay in a separate memory block across repeated compactions. Summary calls are recorded as `compaction_tokens`. A context-length error halves the working window and retries the model turn without repeating its shell command.
 
 ## quickstart
