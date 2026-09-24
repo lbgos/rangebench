@@ -557,9 +557,12 @@ def run_attempt(
         if task.canary:
             emit("canary", canary=task.canary)
     except EnvError as exc:
+        # Setup can fail after Compose images were inspected (for example,
+        # while starting the attacker). Keep the IDs for invalid-run audits.
+        res.service_image_ids = dict(env.service_image_ids)
         res.end_reason = f"env: {exc}"
         res.wall_s = round(time.time() - t0, 1)
-        emit("fatal", reason=res.end_reason)
+        emit("fatal", reason=res.end_reason, service_image_ids=res.service_image_ids)
         if not keep:
             ok, warn = env.down()
             if not ok and warn:
