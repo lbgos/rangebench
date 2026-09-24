@@ -1,5 +1,6 @@
 """Context compaction invariants independent of Docker or a live model."""
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,11 +11,14 @@ from rangebench.agent import Usage
 from rangebench.runner import (
     DEFAULT_CTX_WINDOW,
     MAX_CTX_WINDOW,
+    RUN_STATE_END,
+    RUN_STATE_START,
     AttemptResult,
     _compact_history_llm,
     _confirmed_stage_facts,
     _deterministic_trim,
     _estimate_tokens,
+    _fair_summary_memory,
     _is_context_length_error,
     _is_output_limit_error,
     _maybe_compact,
@@ -256,6 +260,137 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(tokens.prompt_tokens + tokens.completion_tokens, 110 * len(client.calls))
         for call, limit in zip(client.calls, client.limits):
             self.assertLess(_estimate_tokens(call) * 2 + limit, 8000)
+
+    def test_first_chunk_fact_survives_model_that_forgets_prior_summary(self) -> None:
+        class ForgetfulClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                super().chat(messages, max_tokens, temperature)
+                answer = "EARLY_FACT" if len(self.calls) == 1 else "only the newest observation"
+                return answer, Usage(prompt_tokens=90, completion_tokens=20), None
+
+        messages = history(20, "x" * 3000)
+        messages[3]["content"] += " EARLY_FACT"
+        client = ForgetfulClient()
+        compacted, _, error, api_error = _compact_history_llm(
+            client, messages, 2, ctx_window=8000, token_density=2.0
+        )
+        self.assertIsNone(error)
+        self.assertFalse(api_error)
+        self.assertGreater(len(client.calls), 2)
+        self.assertIn("EARLY_FACT", compacted[2]["content"])
+        self.assertIn("only the newest observation", compacted[2]["content"])
+
+    def test_intermediate_chunk_fact_survives_forgetful_summaries(self) -> None:
+        class ForgetfulClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                return f"<FACT_CHUNK_{len(self.calls)}>", Usage(prompt_tokens=90, completion_tokens=20), None
+
+        client = ForgetfulClient()
+        compacted, _, error, api_error = _compact_history_llm(
+            client, history(20, "x" * 3000), 2, ctx_window=8000, token_density=2.0
+        )
+        self.assertIsNone(error)
+        self.assertFalse(api_error)
+        self.assertGreater(len(client.calls), 4)
+        middle = len(client.calls) // 2
+        for number in (1, middle, len(client.calls)):
+            self.assertIn(f"<FACT_CHUNK_{number}>", compacted[2]["content"])
+        self.assertIn(f"<FACT_CHUNK_{middle}>", client.calls[-1][1]["content"])
+
+    def test_summary_memory_reports_omission_and_shortening(self) -> None:
+        memory = _fair_summary_memory(["fact " + "x" * 100 for _ in range(20)], 130)
+        self.assertLessEqual(len(memory), 130)
+        self.assertRegex(memory, r"20 chunk summaries; [1-9][0-9]* omitted")
+        self.assertRegex(memory, r"[1-9][0-9]* shortened")
+
+    def test_summary_context_error_retries_smaller_chunk_without_skipping_text(self) -> None:
+        class SmallWindowClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                self.limits.append(max_tokens)
+                if len(self.calls) == 1:
+                    return "", Usage(prompt_tokens=90), "context_length_exceeded"
+                return "summary", Usage(prompt_tokens=90, completion_tokens=20), None
+
+        messages = history(8, "x" * 2000)
+        messages[3]["content"] += " RETRY_MARKER"
+        client = SmallWindowClient()
+        compacted, usage, error, api_error = _compact_history_llm(
+            client, messages, 1, ctx_window=8000, token_density=2.0
+        )
+        self.assertIsNone(error)
+        self.assertFalse(api_error)
+        self.assertGreater(len(client.calls), 2)
+        self.assertIn("RETRY_MARKER", client.calls[0][1]["content"])
+        self.assertIn("RETRY_MARKER", client.calls[1][1]["content"])
+        self.assertLess(client.limits[1], client.limits[0])
+        self.assertTrue(all(limit <= client.limits[1] for limit in client.limits[1:]))
+        self.assertEqual(usage.prompt_tokens, 90 * len(client.calls))
+        self.assertIn("summary", compacted[2]["content"])
+
+    def test_summary_context_retries_are_bounded(self) -> None:
+        class AlwaysTooLarge(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                self.calls.append(messages)
+                return "", Usage(), "context_length_exceeded"
+
+        client = AlwaysTooLarge()
+        _, _, error, _ = _compact_history_llm(
+            client, history(8, "x" * 2000), 1, ctx_window=8000, token_density=2.0
+        )
+        self.assertIn("context", error or "")
+        self.assertGreater(len(client.calls), 1)
+        self.assertLessEqual(len(client.calls), 8)
+
+    def test_summary_stops_at_deadline_before_another_chunk(self) -> None:
+        clock = SimpleNamespace(now=10.0)
+
+        class SlowClient(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                clock.now = 101.0
+                return super().chat(messages, max_tokens, temperature)
+
+        client = SlowClient()
+        messages = history(20, "x" * 3000)
+        with patch("rangebench.runner.time.time", side_effect=lambda: clock.now):
+            compacted, usage, error, api_error = _compact_history_llm(
+                client, messages, 2, ctx_window=8000, token_density=2.0, deadline=100.0
+            )
+        self.assertIs(compacted, messages)
+        self.assertEqual(error, "infra timeout")
+        self.assertFalse(api_error)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(usage.prompt_tokens, 90)
+
+    def test_wrong_submission_count_is_authoritative_across_compactions(self) -> None:
+        messages = history(8, "x" * 500)
+        result = AttemptResult("test", 1, wrong=2)
+        first = _maybe_compact(
+            FakeClient(), messages, result, 1200, 200, 2, 0.8, False,
+            lambda kind, **kwargs: None,
+        )
+        first.extend(history(5)[2:])
+        second = _maybe_compact(
+            FakeClient(), first, result, 1200, 200, 1, 0.8, False,
+            lambda kind, **kwargs: None,
+        )
+        for compacted in (first, second):
+            state = json.loads(
+                compacted[2]["content"].split(RUN_STATE_START, 1)[1]
+                .split(RUN_STATE_END, 1)[0].strip()
+            )
+            self.assertEqual(state, {"wrong_submissions": 2, "wrong_limit": 3})
 
     def test_transcript_chunks_keep_message_boundaries(self) -> None:
         messages = [
