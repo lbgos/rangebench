@@ -331,6 +331,24 @@ def _compact_history_llm(
                         "empty compaction summary; fallback unavailable",
                         True,
                     )
+                if summary:
+                    # Carry the successful earlier chunks into the fallback memory.
+                    prior = _excerpt(summary, narrative_chars // 2)
+                    recent = _excerpt(
+                        _memory_narrative(fallback[2]["content"]),
+                        narrative_chars - len(prior) - 2,
+                    )
+                    fallback[2] = {
+                        "role": "user",
+                        "content": (
+                            "[COMPACTION MEMORY]\n"
+                            + prior
+                            + "\n\n"
+                            + recent
+                            + facts_block
+                            + "\n[END MEMORY; recent turns follow verbatim]"
+                        ),
+                    }
                 return fallback, total_usage, "empty compaction summary", False
             summary = _excerpt(next_summary.strip(), narrative_chars)
         summary_msg = {

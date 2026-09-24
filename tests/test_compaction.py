@@ -354,6 +354,33 @@ class CompactionTests(unittest.TestCase):
         fallback = next(payload for kind, payload in events if kind == "compaction-fallback")
         self.assertEqual(fallback["error"], "empty compaction summary")
 
+    def test_empty_later_chunk_keeps_earlier_summary(self) -> None:
+        class EmptySecondChunk(FakeClient):
+            def chat(
+                self, messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, str | None]:
+                super().chat(messages, max_tokens, temperature)
+                return (
+                    "EARLIER_SUMMARY_FACT" if len(self.calls) == 1 else "",
+                    Usage(prompt_tokens=90, completion_tokens=max_tokens),
+                    None,
+                )
+
+        messages = history(20, "x" * 3000)
+        messages[3]["content"] = _scored_feedback("web", "flag{web}", ["pwn"])
+        client = EmptySecondChunk()
+        compacted, usage, error, api_error = _compact_history_llm(
+            client, messages, 2, ctx_window=8000, token_density=2.0
+        )
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(error, "empty compaction summary")
+        self.assertFalse(api_error)
+        self.assertIn("EARLIER_SUMMARY_FACT", compacted[2]["content"])
+        self.assertEqual(_confirmed_stage_facts(compacted)[0]["flag"], "flag{web}")
+        self.assertEqual(compacted[-4:], messages[-4:])
+        self.assertEqual(usage.prompt_tokens, 180)
+        self.assertEqual(usage.completion_tokens, 2000)
+
     def test_local_compaction_limit_keeps_deterministic_fallback(self) -> None:
         messages = history(8, "port 8080 open")
         compacted, tokens, error, api_error = _compact_history_llm(
