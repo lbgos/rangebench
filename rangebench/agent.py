@@ -435,13 +435,12 @@ COMMAND_RE = re.compile(r"COMMAND:\s*\n?(.*?)(?=\nANSWER:|\Z)", re.IGNORECASE | 
 REFUSAL_FINISH_REASONS = frozenset({"refusal", "content_filter"})
 
 # Narrow fallback: first-person refusal statements. Capability statements
-# ("I cannot reach the host") must not match, so a negated first person must
-# be followed by a help/compliance verb within one sentence.
+# ("I cannot reach the host") and operational apologies ("I'm sorry the scan
+# failed") must not match, so a negated first person must be followed by a
+# help/compliance verb within one sentence.
 _REFUSAL_TEXT_RE = re.compile(
     r"\bi (?:cannot|can['’]t|won['’]t|will not|am unable to|am not able to)\b"
     r"[^.!?\n]{0,48}?\b(?:help|assist|comply|fulfill|do that)\b"
-    r"|\bi(?:['’]m| am) sorry\b"
-    r"|\bi apologize\b"
     r"|against (?:my|the) (?:safety\s+)?(?:policy|guidelines|rules|terms)\b"
     r"|\brefuse to (?:help|assist|comply|fulfill)\b",
     re.IGNORECASE,

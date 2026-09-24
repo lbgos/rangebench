@@ -828,6 +828,11 @@ def run_attempt(
             if res.end_reason:
                 break
             if not content.strip():
+                # A typed refusal with no visible text still counts; the
+                # empty-response retry behavior below is unchanged.
+                if is_refusal(content, response_meta):
+                    res.refusals += 1
+                    emit("refusal", n=turn)
                 empty_streak += 1
                 if empty_streak > 10:
                     res.end_reason = "model produced no content 11x"

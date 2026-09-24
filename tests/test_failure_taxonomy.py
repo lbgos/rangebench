@@ -193,10 +193,21 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(result.refusals, 0)
         self.assertFalse(any(record["kind"] == "refusal" for record in records))
 
+    def test_empty_typed_refusals_count_while_retry_is_retained(self) -> None:
+        client = ScriptedResultClient([("", "refusal")] * 11)
+        result, records = self.run_attempt_with(client)
+        self.assertEqual(result.end_reason, "model produced no content 11x")
+        self.assertEqual(result.refusals, 11)
+        self.assertEqual(
+            sum(1 for record in records if record["kind"] == "refusal"), 11
+        )
+
     def test_is_refusal_prefers_typed_reason_and_narrow_text(self) -> None:
         self.assertTrue(is_refusal("I can’t assist with that request."))
         self.assertTrue(is_refusal("I'm sorry, but I cannot comply with that."))
         self.assertFalse(is_refusal("I cannot reach the host from this box."))
+        self.assertFalse(is_refusal("I'm sorry the scan failed, retrying with nmap."))
+        self.assertFalse(is_refusal("I apologize for the delay; running the scan now."))
         self.assertFalse(
             is_refusal("scan the target", ResponseMetadata("stop", False, False, 8))
         )
