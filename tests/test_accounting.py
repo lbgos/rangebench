@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from rangebench.agent import AnthropicChatClient, ChatClient, Usage
-from rangebench.cli import _get_git_commit, _get_task_set_hash, cmd_preflight, cmd_run
+from rangebench.cli import _get_git_commit, _get_task_set_hash, _write_manifest, cmd_preflight, cmd_run
 from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
 from rangebench.runner import AttemptResult, _maybe_compact
 
@@ -108,6 +108,63 @@ class AccountingTests(unittest.TestCase):
                     "prompt_tokens_details": {"cached_tokens": True},
                 }
             )
+
+    def test_manifest_keeps_source_fingerprint_from_run_start(self) -> None:
+        fingerprint = {
+            "harness_commit": "started-commit",
+            "harness_source_hash": "started-harness",
+            "task_set_hash": "started-tasks",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("rangebench.cli._get_git_commit", side_effect=AssertionError("recomputed")),
+                patch("rangebench.cli._get_harness_hash", side_effect=AssertionError("recomputed")),
+                patch("rangebench.cli._get_task_set_hash", side_effect=AssertionError("recomputed")),
+            ):
+                _write_manifest(Path(tmp), {**fingerprint, "tasks": []}, {"status": "running"})
+                _write_manifest(Path(tmp), {**fingerprint, "tasks": []}, {"status": "completed"})
+            manifest = json.loads((Path(tmp) / "manifest.json").read_text())
+        self.assertEqual({key: manifest[key] for key in fingerprint}, fingerprint)
+
+    def test_source_drift_stops_run_before_next_trial(self) -> None:
+        task = Task(
+            "sample", Path("/tmp"), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "web")]
+        )
+        args = argparse.Namespace(
+            trials=2,
+            ctx_window=128000,
+            reserve=12000,
+            keep_tail=12,
+            threshold=0.82,
+            tasks=[task.id],
+            base_url="http://localhost:8000/v1",
+            provider="openai",
+            model="test",
+            compact="deterministic",
+            keep=False,
+        )
+        first = {
+            "harness_commit": "started-commit",
+            "harness_source_hash": "started-harness",
+            "task_set_hash": "started-tasks",
+        }
+        changed = {**first, "task_set_hash": "changed-tasks"}
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch("rangebench.cli.RESULTS", Path(tmp)),
+                patch("rangebench.cli.load_task", return_value=task),
+                patch("rangebench.cli.ChatClient"),
+                patch("rangebench.cli._get_attacker_digest", return_value="sha256:test"),
+                patch("rangebench.cli._source_fingerprint", side_effect=[first, first, first, changed]),
+                patch("rangebench.cli.run_attempt", return_value=AttemptResult(task.id, 1)) as attempt,
+            ):
+                with self.assertRaisesRegex(SystemExit, "source changed"):
+                    cmd_run(args)
+            self.assertEqual(attempt.call_count, 1)
+            manifest = json.loads(next(Path(tmp).glob("*/manifest.json")).read_text())
+        self.assertEqual(manifest["status"], "source_changed")
+        self.assertEqual(manifest["task_set_hash"], first["task_set_hash"])
+        self.assertEqual(manifest["observed_source"], changed)
 
     def test_reasoning_is_part_of_completion_tokens(self) -> None:
         usage = Usage()

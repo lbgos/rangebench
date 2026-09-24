@@ -90,6 +90,14 @@ def _get_harness_hash() -> str:
     return h.hexdigest()[:16]
 
 
+def _source_fingerprint() -> dict[str, str | None]:
+    return {
+        "harness_commit": _get_git_commit(),
+        "harness_source_hash": _get_harness_hash(),
+        "task_set_hash": _get_task_set_hash(),
+    }
+
+
 def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -107,14 +115,14 @@ def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None
         "trials": doc.get("trials"),
         "started": doc.get("started"),
         "finished": doc.get("finished"),
-        "harness_commit": _get_git_commit(),
-        "harness_source_hash": _get_harness_hash(),
+        "harness_commit": doc.get("harness_commit"),
+        "harness_source_hash": doc.get("harness_source_hash"),
         "attacker_digest": doc.get("attacker_digest"),
         "service_image_ids": [
             {"task": task["task"], "trial": task["trial"], "images": task["service_image_ids"]}
             for task in doc.get("tasks", [])
         ],
-        "task_set_hash": _get_task_set_hash(),
+        "task_set_hash": doc.get("task_set_hash"),
         "task_count": len(doc.get("tasks", [])),
         "output_tokens_include_reasoning": True,
         "usage_coverage": {
@@ -215,12 +223,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     log_dir = RESULTS / run_id
     out = RESULTS / f"{run_id}.json"
+    source_fingerprint = _source_fingerprint()
     doc = {
         "id": run_id,
         "model": args.model,
         "base_url": base,
         "provider": provider,
         "attacker_digest": attacker_digest,
+        **source_fingerprint,
         "ctx_window": args.ctx_window,
         "reserve": args.reserve,
         "keep_tail": args.keep_tail,
@@ -233,9 +243,21 @@ def cmd_run(args: argparse.Namespace) -> None:
     }
     # Fail before spending model calls if the manifest cannot be recorded.
     _write_manifest(log_dir, doc, extra={"status": "running"})
+
+    def verify_source() -> None:
+        current = _source_fingerprint()
+        if current != source_fingerprint:
+            doc["finished"] = datetime.now(UTC).isoformat()
+            _write_manifest(
+                log_dir, doc, extra={"status": "source_changed", "observed_source": current}
+            )
+            raise SystemExit("benchmark source changed during run; rerun from a frozen checkout")
+
     for tid in task_ids:
+        verify_source()
         task = load_task(tid)
         for trial in range(1, args.trials + 1):
+            verify_source()
             project = f"rb-{task.id}-{trial}-{uuid.uuid4().hex[:6]}"
             use_llm = getattr(args, "compact", "llm") == "llm"
             res = run_attempt(
@@ -252,6 +274,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 use_llm_compact=use_llm,
                 attacker_image=attacker_digest,
             )
+            verify_source()
             usage = res.total_usage()
             doc["tasks"].append(
                 {
@@ -309,6 +332,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "progress": f"{len(doc['tasks'])}/{len(task_ids) * args.trials}",
                 },
             )
+    verify_source()
     doc["finished"] = datetime.now(UTC).isoformat()
     out.write_text(json.dumps(doc, indent=2))
     (RESULTS / "latest.json").write_text(json.dumps(doc, indent=2))
