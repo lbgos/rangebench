@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from rangebench.agent import Usage
-from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task
+from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task, TaskEnv
 from rangebench.runner import run_attempt, run_oracle
 
 
@@ -41,6 +41,51 @@ class NoCallsClient:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_unencodable_model_command_gets_observation_without_aborting(self) -> None:
+        class GuardedEnv(TaskEnv):
+            def up(self) -> None:
+                self.service_image_ids = {"target": "sha256:" + "a" * 64}
+                self.service_image_fingerprints = {"target": "sha256:" + "b" * 64}
+
+            def read_flag(self, stage: Stage) -> str:
+                return "flag{test}"
+
+            def down(self) -> tuple[bool, str]:
+                return True, ""
+
+        class SurrogateClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat(
+                self, _messages: list[dict], max_tokens: int, temperature: float = 0.2
+            ) -> tuple[str, Usage, None]:
+                self.calls += 1
+                content = "COMMAND:\necho \udcff" if self.calls == 1 else "ANSWER: flag{test}"
+                return content, Usage(prompt_tokens=20, completion_tokens=10), None
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("rangebench.runner.TaskEnv", GuardedEnv),
+            patch("rangebench.env.subprocess.run") as run,
+        ):
+            task = Task(
+                "sample", Path(tmp), "web", 1, "Find the flag",
+                stages=[Stage("one", "/flag", "target")], turns=2,
+            )
+            result = run_attempt(SurrogateClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+            raw = (Path(tmp) / "sample-t1.jsonl").read_text()
+            records = [json.loads(line) for line in raw.splitlines()]
+
+        self.assertEqual(result.end_reason, "all stages captured")
+        self.assertEqual(result.commands, 1)
+        self.assertIn("\\udcff", raw)
+        self.assertEqual(
+            next(record for record in records if record["kind"] == "exec")["out"],
+            "[command contains invalid UTF-8]",
+        )
+        run.assert_not_called()
+
     def test_keep_writes_event_before_closing_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", FakeEnv):
             task = Task("sample", Path(tmp), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "target")])
