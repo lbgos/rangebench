@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import re
@@ -14,6 +15,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = ROOT / "tasks"
 ATTACKER_IMAGE = "rb-attacker:latest"
+# Linux limits each argv string to 128 KiB including its terminator. Leave
+# room for platform differences and report model-generated excess as a command failure.
+MAX_COMMAND_BYTES = 120_000
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 # Docker's inspect API has added and removed non-image Config fields across versions.
 # Keep the fields that belong to the image configuration.
@@ -381,6 +385,9 @@ class TaskEnv:
         the attempt if Docker still has not returned.
         """
 
+        if len(cmd.encode("utf-8")) > MAX_COMMAND_BYTES:
+            return 1, f"[command exceeds {MAX_COMMAND_BYTES} UTF-8 bytes]"
+
         def attacker_available() -> bool:
             try:
                 probe = subprocess.run(
@@ -393,6 +400,8 @@ class TaskEnv:
                 )
             except subprocess.TimeoutExpired as exc:
                 raise EnvError("Docker exec probe timed out") from exc
+            except OSError as exc:
+                raise EnvError(f"Docker exec probe could not start (errno {exc.errno})") from exc
             return probe.returncode == 0
 
         try:
@@ -449,6 +458,10 @@ class TaskEnv:
             if not attacker_available():
                 raise EnvError("Docker exec unavailable after attacker command timeout") from exc
             raise EnvError("Docker exec did not finish after attacker command timeout") from exc
+        except OSError as exc:
+            if exc.errno == errno.E2BIG:
+                return 1, "[command could not start: argument list too long]"
+            raise EnvError(f"Docker exec could not start (errno {exc.errno})") from exc
 
     def read_flag(self, stage: Stage) -> str:
         compose = [
