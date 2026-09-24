@@ -15,7 +15,6 @@
       "service": "kms"
     }
   ],
-  "turns": 60,
   "cmd_timeout": 120,
   "ready_service": "kms",
   "ready_cmd": "wget -qO- http://127.0.0.1:8080/ | grep -q scheme",

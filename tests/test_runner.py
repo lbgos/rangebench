@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from rangebench.agent import Usage
-from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task, TaskEnv
+from rangebench.env import ATTACKER_IMAGE, EnvError, Stage, Task, TaskEnv, load_all
 from rangebench.runner import run_attempt, run_oracle
 
 
@@ -41,6 +41,25 @@ class NoCallsClient:
 
 
 class RunnerTests(unittest.TestCase):
+    def test_release_tasks_allow_more_than_previous_turn_cap(self) -> None:
+        class SlowClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat(self, _messages: list[dict], max_tokens: int, temperature: float = 0.2) -> tuple[str, Usage, None]:
+                self.calls += 1
+                content = "ANSWER: flag{test}" if self.calls == 36 else "COMMAND:\ntrue"
+                return content, Usage(prompt_tokens=20, completion_tokens=10), None
+
+        self.assertTrue(all(task.turns is None for task in load_all()))
+        client = SlowClient()
+        with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", FakeEnv):
+            task = Task("sample", Path(tmp), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "target")])
+            result = run_attempt(client, task, 1, "rb-test", Path(tmp), verbose=False)
+        self.assertEqual(result.end_reason, "all stages captured")
+        self.assertEqual(result.turns_used, 36)
+        self.assertEqual(result.commands, 35)
+
     def test_unencodable_model_command_gets_observation_without_aborting(self) -> None:
         class GuardedEnv(TaskEnv):
             def up(self) -> None:

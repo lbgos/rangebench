@@ -25,7 +25,6 @@
       "service": "vault"
     }
   ],
-  "turns": 300,
   "cmd_timeout": 180,
   "ready_service": "shop",
   "ready_cmd": "wget -qO- http://127.0.0.1:8080/ | grep -q shop",

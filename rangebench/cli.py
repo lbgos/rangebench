@@ -160,7 +160,7 @@ def _write_report_html(log_dir: Path, doc: dict) -> None:
             status = "error" if not t.get("scored", True) else "pass" if t.get("solved") else "fail"
             color = "#10b981" if status == "pass" else "#ef4444" if status == "error" else "#9ca3af"
             rows.append(
-                f"<tr><td>{html.escape(t.get('task', ''))}</td><td>{html.escape(t.get('category', ''))}</td><td>T{t.get('tier', '')}</td><td style='color:{color}'>{status}</td><td>{t.get('turns_used', 0)}/{t.get('turns_budget', 0)}</td><td>{out_tok}</td><td>{t.get('wall_s', 0)}</td><td>{html.escape(t.get('end_reason', ''))}</td></tr>"
+                f"<tr><td>{html.escape(t.get('task', ''))}</td><td>{html.escape(t.get('category', ''))}</td><td>T{t.get('tier', '')}</td><td style='color:{color}'>{status}</td><td>{t.get('turns_used', 0)}/{t.get('turns_budget') if t.get('turns_budget') is not None else '∞'}</td><td>{out_tok}</td><td>{t.get('wall_s', 0)}</td><td>{html.escape(t.get('end_reason', ''))}</td></tr>"
             )
         scored = [t for t in tasks if t.get("scored", True)]
         solved = sum(1 for t in scored if t.get("solved"))
@@ -181,7 +181,7 @@ def cmd_list(_args: argparse.Namespace) -> None:
     )
     for t in tasks:
         print(
-            f"{t.id:24} {t.category:10} T{t.tier:<3} {len(t.stages):<6} {t.turns:<5} {t.infra_timeout:<6} {t.max_output_tokens:<10} {t.statement[:60]}"
+            f"{t.id:24} {t.category:10} T{t.tier:<3} {len(t.stages):<6} {str(t.turns) if t.turns is not None else '∞':<5} {t.infra_timeout:<6} {t.max_output_tokens:<10} {t.statement[:60]}"
         )
 
 
@@ -396,7 +396,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     for t in doc["tasks"]:
         out_tok = t["completion_tokens"]
         print(
-            f"{t['task']:20} {str(t['solved']):6} {t['turns_used']}/{t['turns_budget']:<6} {out_tok:<10} {t['wall_s']:<8} {t['end_reason']}"
+            f"{t['task']:20} {str(t['solved']):6} {t['turns_used']}/{str(t['turns_budget']) if t['turns_budget'] is not None else '∞':<6} {out_tok:<10} {t['wall_s']:<8} {t['end_reason']}"
         )
     if invalid:
         raise SystemExit(1)

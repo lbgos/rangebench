@@ -15,7 +15,6 @@
       "service": "shop"
     }
   ],
-  "turns": 120,
   "cmd_timeout": 60,
   "ready_service": "shop",
   "ready_cmd": "wget -qO- http://127.0.0.1:8080/ | grep -qi shop",

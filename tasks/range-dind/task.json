@@ -25,7 +25,6 @@
       "service": "dind"
     }
   ],
-  "turns": 300,
   "cmd_timeout": 180,
   "ready_service": "dind",
   "ready_cmd": "sh -c 'docker ps -a --filter name=backup-job --filter status=created -q | grep -q .'",

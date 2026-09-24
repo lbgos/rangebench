@@ -15,7 +15,6 @@
       "service": "api"
     }
   ],
-  "turns": 30,
   "cmd_timeout": 60,
   "ready_service": "api",
   "ready_cmd": "wget -qO- http://127.0.0.1:8080/ | grep -q inventory",
