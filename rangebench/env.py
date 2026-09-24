@@ -154,7 +154,9 @@ def load_all() -> list[Task]:
 
 def _run(cmd: list[str], timeout: int = 300, check: bool = True) -> subprocess.CompletedProcess:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
+        )
     except subprocess.TimeoutExpired as exc:
         raise EnvError(f"{' '.join(cmd[:6])}... timed out after {timeout}s") from exc
     if check and proc.returncode != 0:
@@ -385,6 +387,8 @@ class TaskEnv:
                     ["docker", "exec", self.attacker, "true"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -413,6 +417,8 @@ class TaskEnv:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout + 15,
             )
             stderr = (proc.stderr or "").lstrip()

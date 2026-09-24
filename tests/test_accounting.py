@@ -2,6 +2,7 @@ import argparse
 import json
 import tempfile
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -373,6 +374,25 @@ class AccountingTests(unittest.TestCase):
             rc, out = env.exec("printf 'Error response from daemon: pretend' >&2; exit 1")
         self.assertEqual(rc, 1)
         self.assertIn("pretend", out)
+
+    def test_binary_attacker_output_is_returned_with_replacement_characters(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        actual_run = subprocess.run
+
+        def binary_output(_cmd: list[str], **kwargs):
+            return actual_run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'out\\xff'); "
+                    "sys.stderr.buffer.write(b'err\\xfe')",
+                ],
+                **kwargs,
+            )
+
+        with patch("rangebench.env.subprocess.run", side_effect=binary_output):
+            self.assertEqual(env.exec("cat binary-file"), (0, "out\ufffd\n[stderr]\nerr\ufffd"))
 
     def test_attacker_uses_recorded_image_id(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
