@@ -298,14 +298,43 @@ class AccountingTests(unittest.TestCase):
         env = TaskEnv(task, "rb-test", "sha256:recorded")
         with (
             patch("rangebench.env._run") as run,
-            patch.object(env, "_verify_compose_config"),
+            patch.object(env, "_verify_compose_config", return_value=["target"]),
             patch.object(env, "verify_isolation"),
+            patch.object(env, "inspect_service_images", return_value={"target": "sha256:recorded"}),
         ):
             env.up()
         docker_run = next(
             call.args[0] for call in run.call_args_list if call.args[0][:2] == ["docker", "run"]
         )
         self.assertEqual(docker_run[-3:], ["sha256:recorded", "sleep", "infinity"])
+        self.assertEqual(env.service_image_ids, {"target": "sha256:recorded"})
+
+    def test_service_image_inspection_requires_each_service_id(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        digest = "sha256:" + "a" * 64
+        responses = [
+            subprocess.CompletedProcess([], 0, "container-1\n", ""),
+            subprocess.CompletedProcess([], 0, digest + "\n", ""),
+            subprocess.CompletedProcess([], 0, "container-2\n", ""),
+            subprocess.CompletedProcess([], 0, digest + "\n", ""),
+        ]
+        with patch("rangebench.env._run", side_effect=responses) as run:
+            images = env.inspect_service_images(["docker", "compose"], ["api", "db"])
+        self.assertEqual(images, {"api": digest, "db": digest})
+        self.assertEqual(run.call_args.args[0], ["docker", "inspect", "--format", "{{.Image}}", "container-2"])
+
+        with patch("rangebench.env._run", return_value=subprocess.CompletedProcess([], 0, "", "")):
+            with self.assertRaisesRegex(EnvError, "no container for service api"):
+                env.inspect_service_images(["docker", "compose"], ["api"])
+
+        bad = [
+            subprocess.CompletedProcess([], 0, "container-1\n", ""),
+            subprocess.CompletedProcess([], 0, "nginx:latest\n", ""),
+        ]
+        with patch("rangebench.env._run", side_effect=bad):
+            with self.assertRaisesRegex(EnvError, "invalid image ID for service api"):
+                env.inspect_service_images(["docker", "compose"], ["api"])
 
     def test_attacker_command_timeout_is_enforced_inside_container(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
@@ -408,6 +437,7 @@ class AccountingTests(unittest.TestCase):
         )
         result.prompt_tokens = 100
         result.completion_tokens = 40
+        result.service_image_ids = {"api": "sha256:" + "a" * 64}
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 patch("rangebench.cli.RESULTS", Path(tmp)),
@@ -432,6 +462,7 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(saved["compaction_cache_read_tokens"], 0)
             self.assertIsNone(saved["cache_write_tokens"])
             self.assertEqual(saved["cache_read_reported_calls"], 2)
+            self.assertEqual(saved["service_image_ids"], result.service_image_ids)
             manifest = next(Path(tmp).glob("*/manifest.json"))
             manifest_data = json.loads(manifest.read_text())
             self.assertEqual(manifest_data["status"], "completed_with_errors")
@@ -444,6 +475,10 @@ class AccountingTests(unittest.TestCase):
                     "input_reported_calls": 2,
                     "output_reported_calls": 2,
                 },
+            )
+            self.assertEqual(
+                manifest_data["service_image_ids"],
+                [{"task": task.id, "trial": 1, "images": result.service_image_ids}],
             )
 
     def test_preflight_stops_if_attacker_build_fails(self) -> None:

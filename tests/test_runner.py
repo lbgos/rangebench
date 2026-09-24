@@ -14,6 +14,7 @@ class FakeEnv:
     def __init__(self, task: Task, project: str, attacker_image: str = ATTACKER_IMAGE):
         self.attacker = f"{project}-atk"
         self.attacker_image = attacker_image
+        self.service_image_ids = {"target": "sha256:" + "a" * 64}
 
     def up(self) -> None:
         pass
@@ -41,6 +42,7 @@ class RunnerTests(unittest.TestCase):
             records = [json.loads(line) for line in (Path(tmp) / "sample-t1.jsonl").read_text().splitlines()]
 
         self.assertEqual(result.end_reason, "all stages captured")
+        self.assertEqual(result.service_image_ids, {"target": "sha256:" + "a" * 64})
         kinds = [record["kind"] for record in records]
         self.assertLess(kinds.index("keep"), kinds.index("end"))
 

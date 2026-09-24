@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -110,6 +111,7 @@ class TaskEnv:
         self.project = project
         self.attacker = f"{project}-atk"
         self.attacker_image = attacker_image
+        self.service_image_ids: dict[str, str] = {}
 
     def up(self, build: bool = True) -> None:
         compose = [
@@ -120,7 +122,7 @@ class TaskEnv:
             "-f",
             str(self.task.dir / self.task.compose),
         ]
-        self._verify_compose_config(compose)
+        services = self._verify_compose_config(compose)
         # Reused project names must not carry old flags or readiness markers.
         _run(["docker", "rm", "-f", self.attacker], check=False, timeout=60)
         _run(compose + ["down", "-v", "--remove-orphans"], timeout=300)
@@ -145,6 +147,7 @@ class TaskEnv:
             full = net if "_" in net else f"{self.project}_{net}"
             nets.append(full)
         self.verify_isolation(nets)
+        self.service_image_ids = self.inspect_service_images(compose, services)
         vol_args: list[str] = []
         for v in self.task.shared_volumes:
             name, _, dest = v.partition(":")
@@ -194,7 +197,7 @@ class TaskEnv:
             timeout=120,
         )
 
-    def _verify_compose_config(self, compose: list[str]) -> None:
+    def _verify_compose_config(self, compose: list[str]) -> list[str]:
         """Reject network escapes before Compose creates any container or network."""
         rendered = _run(compose + ["config", "--format", "json"], timeout=60).stdout
         try:
@@ -228,6 +231,30 @@ class TaskEnv:
                 raise EnvError(f"{self.task.id}: service {name} uses an undeclared network")
         if not set(self.task.attacker_networks).issubset(networks):
             raise EnvError(f"{self.task.id}: attacker network is not declared by Compose")
+        return sorted(services)
+
+    def inspect_service_images(self, compose: list[str], services: list[str]) -> dict[str, str]:
+        """Record the exact images used by this attempt's Compose containers."""
+        images: dict[str, str] = {}
+        for service in services:
+            # Include completed setup services; they still supplied the task image.
+            container_ids = _run(
+                compose + ["ps", "--all", "--quiet", service], timeout=30
+            ).stdout.split()
+            if not container_ids:
+                raise EnvError(f"{self.task.id}: no container for service {service}")
+            image_ids = {
+                _run(
+                    ["docker", "inspect", "--format", "{{.Image}}", container_id], timeout=30
+                ).stdout.strip()
+                for container_id in container_ids
+            }
+            if len(image_ids) != 1 or any(
+                re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None for image_id in image_ids
+            ):
+                raise EnvError(f"{self.task.id}: invalid image ID for service {service}")
+            images[service] = image_ids.pop()
+        return images
 
     def verify_isolation(self, attacker_networks: list[str]) -> None:
         """Reject Compose networks that would let a model reach outside the lab."""

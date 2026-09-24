@@ -55,6 +55,7 @@ class AttemptResult:
     wall_s: float = 0.0
     end_reason: str = ""
     stage_flags: dict[str, str] = field(default_factory=dict)  # ground truth read at scoring
+    service_image_ids: dict[str, str] = field(default_factory=dict)
 
     def total_usage(self) -> Usage:
         total = Usage()
@@ -542,11 +543,17 @@ def run_attempt(
 
     try:
         env.up()
+        res.service_image_ids = dict(env.service_image_ids)
         truth: dict[str, str] = {}
         for st in task.stages:
             truth[st.name] = env.read_flag(st)
         res.stage_flags = dict(truth)
-        emit("env-up", project=project, stages=[s.name for s in task.stages])
+        emit(
+            "env-up",
+            project=project,
+            stages=[s.name for s in task.stages],
+            service_image_ids=res.service_image_ids,
+        )
         if task.canary:
             emit("canary", canary=task.canary)
     except EnvError as exc:

@@ -110,6 +110,10 @@ def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None
         "harness_commit": _get_git_commit(),
         "harness_source_hash": _get_harness_hash(),
         "attacker_digest": doc.get("attacker_digest"),
+        "service_image_ids": [
+            {"task": task["task"], "trial": task["trial"], "images": task["service_image_ids"]}
+            for task in doc.get("tasks", [])
+        ],
         "task_set_hash": _get_task_set_hash(),
         "task_count": len(doc.get("tasks", [])),
         "output_tokens_include_reasoning": True,
@@ -268,6 +272,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "turns_budget": task.turns,
                     "effective_ctx_window": res.effective_ctx_window,
                     "commands": res.commands,
+                    "service_image_ids": res.service_image_ids,
                     "prompt_tokens": res.prompt_tokens,
                     "completion_tokens": res.completion_tokens,
                     "reasoning_tokens": res.reasoning_tokens,
