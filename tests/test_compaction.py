@@ -553,7 +553,7 @@ class CompactionTests(unittest.TestCase):
     def test_output_cap_retry_keeps_context_window(self) -> None:
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
-                pass
+                self.service_image_ids = {"target": "sha256:test"}
 
             def up(self) -> None:
                 pass
