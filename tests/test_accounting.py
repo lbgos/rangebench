@@ -59,6 +59,21 @@ class AccountingTests(unittest.TestCase):
                     self.assertEqual(usage.output_reported_calls, int(missing_key != output_key))
                     urlopen.assert_called_once()
 
+            if isinstance(client, AnthropicChatClient):
+                with self.subTest(client="AnthropicChatClient", foreign_usage_fields=True):
+                    body["usage"] = {"prompt_tokens": 10, "completion_tokens": 10}
+                    with patch(
+                        "rangebench.agent.urllib.request.urlopen", return_value=Response(body)
+                    ):
+                        content, usage, error = client.chat(
+                            [{"role": "user", "content": "test"}], 10
+                        )
+                    self.assertEqual(content, "")
+                    self.assertEqual(error, "missing input or output token usage")
+                    self.assertEqual(
+                        (usage.input_reported_calls, usage.output_reported_calls), (0, 0)
+                    )
+
             with self.subTest(client=type(client).__name__, zero_usage=True):
                 body["usage"] = {input_key: 0, output_key: 0}
                 with patch("rangebench.agent.urllib.request.urlopen", return_value=Response(body)):

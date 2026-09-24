@@ -443,6 +443,8 @@ def _maybe_compact(
 
 def _is_context_length_error(error: str) -> bool:
     lower = error.lower()
+    if "http 429" in lower:
+        return False
     return any(
         marker in lower
         for marker in (

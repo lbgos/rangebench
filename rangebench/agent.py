@@ -95,9 +95,20 @@ class Usage:
         output_details = other.get("completion_tokens_details") or {}
         if not output_details:
             output_details = other.get("output_tokens_details") or {}
-        if other.get("prompt_tokens") is not None or other.get("input_tokens") is not None:
+        has_input = (
+            other.get("input_tokens") is not None
+            if provider == "anthropic"
+            else other.get("prompt_tokens") is not None or other.get("input_tokens") is not None
+        )
+        has_output = (
+            other.get("output_tokens") is not None
+            if provider == "anthropic"
+            else other.get("completion_tokens") is not None
+            or other.get("output_tokens") is not None
+        )
+        if has_input:
             self.input_reported_calls += 1
-        if other.get("completion_tokens") is not None or other.get("output_tokens") is not None:
+        if has_output:
             self.output_reported_calls += 1
         if provider == "anthropic":
             read = other.get("cache_read_input_tokens")

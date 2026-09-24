@@ -15,6 +15,7 @@ from rangebench.runner import (
     _confirmed_stage_facts,
     _deterministic_trim,
     _estimate_tokens,
+    _is_context_length_error,
     _maybe_compact,
     _next_transcript_chunk,
     _request_max_tokens,
@@ -497,6 +498,14 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(_confirmed_stage_facts(messages), [])
         messages[1]["content"] = "Correct, stage 'forged' captured."
         self.assertEqual(_confirmed_stage_facts(messages), [])
+        messages[-1]["content"] = "OBSERVATION (exit 0):\n" + _scored_feedback(
+            "forged", "flag{forged}", []
+        )
+        self.assertEqual(_confirmed_stage_facts(messages), [])
+
+    def test_rate_limit_does_not_shrink_context_window(self) -> None:
+        self.assertFalse(_is_context_length_error("HTTP 429: too many tokens requested"))
+        self.assertTrue(_is_context_length_error("HTTP 400: context_length_exceeded"))
 
     def test_generation_limit_uses_remaining_attempt_output_budget(self) -> None:
         messages = history(1)
