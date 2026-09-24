@@ -15,6 +15,7 @@ class FakeEnv:
         self.attacker = f"{project}-atk"
         self.attacker_image = attacker_image
         self.service_image_ids = {"target": "sha256:" + "a" * 64}
+        self.service_image_fingerprints = {"target": "sha256:" + "b" * 64}
 
     def up(self) -> None:
         pass
@@ -48,6 +49,9 @@ class RunnerTests(unittest.TestCase):
 
         self.assertEqual(result.end_reason, "all stages captured")
         self.assertEqual(result.service_image_ids, {"target": "sha256:" + "a" * 64})
+        self.assertEqual(result.service_image_fingerprints, {"target": "sha256:" + "b" * 64})
+        env_up = next(record for record in records if record["kind"] == "env-up")
+        self.assertEqual(env_up["service_image_fingerprints"], result.service_image_fingerprints)
         kinds = [record["kind"] for record in records]
         self.assertLess(kinds.index("keep"), kinds.index("end"))
 
@@ -55,6 +59,7 @@ class RunnerTests(unittest.TestCase):
         class MissingImageEnv(FakeEnv):
             def up(self) -> None:
                 self.service_image_ids = {}
+                self.service_image_fingerprints = {}
                 raise EnvError("no container for service target")
 
         with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", MissingImageEnv):
@@ -62,6 +67,7 @@ class RunnerTests(unittest.TestCase):
             result = run_attempt(NoCallsClient(), task, 1, "rb-test", Path(tmp), verbose=False)
         self.assertEqual(result.end_reason, "env: no container for service target")
         self.assertEqual(result.service_image_ids, {})
+        self.assertEqual(result.service_image_fingerprints, {})
 
     def test_late_startup_error_preserves_inspected_service_images(self) -> None:
         class LateFailureEnv(FakeEnv):
@@ -76,6 +82,8 @@ class RunnerTests(unittest.TestCase):
         expected = {"target": "sha256:" + "a" * 64}
         self.assertEqual(result.service_image_ids, expected)
         self.assertEqual(records[-1]["service_image_ids"], expected)
+        self.assertEqual(result.service_image_fingerprints, {"target": "sha256:" + "b" * 64})
+        self.assertEqual(records[-1]["service_image_fingerprints"], result.service_image_fingerprints)
 
     def test_oracle_failure_is_fatal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

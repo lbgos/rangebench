@@ -56,6 +56,7 @@ class AttemptResult:
     end_reason: str = ""
     stage_flags: dict[str, str] = field(default_factory=dict)  # ground truth read at scoring
     service_image_ids: dict[str, str] = field(default_factory=dict)
+    service_image_fingerprints: dict[str, str] = field(default_factory=dict)
 
     def total_usage(self) -> Usage:
         total = Usage()
@@ -544,6 +545,7 @@ def run_attempt(
     try:
         env.up()
         res.service_image_ids = dict(env.service_image_ids)
+        res.service_image_fingerprints = dict(env.service_image_fingerprints)
         truth: dict[str, str] = {}
         for st in task.stages:
             truth[st.name] = env.read_flag(st)
@@ -553,6 +555,7 @@ def run_attempt(
             project=project,
             stages=[s.name for s in task.stages],
             service_image_ids=res.service_image_ids,
+            service_image_fingerprints=res.service_image_fingerprints,
         )
         if task.canary:
             emit("canary", canary=task.canary)
@@ -560,9 +563,15 @@ def run_attempt(
         # Setup can fail after Compose images were inspected (for example,
         # while starting the attacker). Keep the IDs for invalid-run audits.
         res.service_image_ids = dict(env.service_image_ids)
+        res.service_image_fingerprints = dict(env.service_image_fingerprints)
         res.end_reason = f"env: {exc}"
         res.wall_s = round(time.time() - t0, 1)
-        emit("fatal", reason=res.end_reason, service_image_ids=res.service_image_ids)
+        emit(
+            "fatal",
+            reason=res.end_reason,
+            service_image_ids=res.service_image_ids,
+            service_image_fingerprints=res.service_image_fingerprints,
+        )
         if not keep:
             ok, warn = env.down()
             if not ok and warn:
@@ -762,6 +771,8 @@ def run_attempt(
             ctok=res.completion_tokens,
             rtok=res.reasoning_tokens,
             compaction_tokens=res.compaction_tokens,
+            service_image_ids=res.service_image_ids,
+            service_image_fingerprints=res.service_image_fingerprints,
             usage=res.total_usage().as_dict(),
             model_usage=res.model_usage.as_dict(),
             compaction_usage=res.compaction_usage.as_dict(),

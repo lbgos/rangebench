@@ -122,6 +122,14 @@ def _write_manifest(log_dir: Path, doc: dict, extra: dict | None = None) -> None
             {"task": task["task"], "trial": task["trial"], "images": task["service_image_ids"]}
             for task in doc.get("tasks", [])
         ],
+        "service_image_fingerprints": [
+            {
+                "task": task["task"],
+                "trial": task["trial"],
+                "images": task["service_image_fingerprints"],
+            }
+            for task in doc.get("tasks", [])
+        ],
         "task_set_hash": doc.get("task_set_hash"),
         "task_count": len(doc.get("tasks", [])),
         "output_tokens_include_reasoning": True,
@@ -302,6 +310,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                     "effective_ctx_window": res.effective_ctx_window,
                     "commands": res.commands,
                     "service_image_ids": res.service_image_ids,
+                    "service_image_fingerprints": res.service_image_fingerprints,
                     "prompt_tokens": res.prompt_tokens,
                     "completion_tokens": res.completion_tokens,
                     "reasoning_tokens": res.reasoning_tokens,

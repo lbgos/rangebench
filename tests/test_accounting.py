@@ -14,7 +14,7 @@ from rangebench.cli import (
     cmd_preflight,
     cmd_run,
 )
-from rangebench.env import EnvError, Stage, Task, TaskEnv, _run
+from rangebench.env import EnvError, Stage, Task, TaskEnv, _run, image_content_fingerprint
 from rangebench.runner import AttemptResult, _maybe_compact
 
 
@@ -169,7 +169,10 @@ class AccountingTests(unittest.TestCase):
                 patch(
                     "rangebench.cli.run_attempt",
                     return_value=AttemptResult(
-                        task.id, 1, service_image_ids={"api": "sha256:" + "a" * 64}
+                        task.id,
+                        1,
+                        service_image_ids={"api": "sha256:" + "a" * 64},
+                        service_image_fingerprints={"api": "sha256:" + "b" * 64},
                     ),
                 ) as attempt,
             ):
@@ -183,6 +186,7 @@ class AccountingTests(unittest.TestCase):
         self.assertEqual(manifest["observed_source"], changed)
         self.assertEqual(manifest["task_count"], 1)
         self.assertEqual(manifest["service_image_ids"][0]["images"], saved["service_image_ids"])
+        self.assertEqual(manifest["service_image_fingerprints"][0]["images"], saved["service_image_fingerprints"])
         self.assertFalse(saved["scored"])
         self.assertEqual(saved["end_reason"], "source changed")
 
@@ -378,6 +382,7 @@ class AccountingTests(unittest.TestCase):
             patch.object(env, "_verify_compose_config", return_value=["target"]),
             patch.object(env, "verify_isolation"),
             patch.object(env, "inspect_service_images", return_value={"target": "sha256:recorded"}),
+            patch.object(env, "inspect_service_image_fingerprints", return_value={"target": "sha256:content"}),
         ):
             env.up()
         docker_run = next(
@@ -385,6 +390,7 @@ class AccountingTests(unittest.TestCase):
         )
         self.assertEqual(docker_run[-3:], ["sha256:recorded", "sleep", "infinity"])
         self.assertEqual(env.service_image_ids, {"target": "sha256:recorded"})
+        self.assertEqual(env.service_image_fingerprints, {"target": "sha256:content"})
 
     def test_service_image_inspection_requires_each_service_id(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
@@ -414,6 +420,94 @@ class AccountingTests(unittest.TestCase):
         with patch("rangebench.env._run", side_effect=bad):
             with self.assertRaisesRegex(EnvError, "invalid image ID for service api"):
                 env.inspect_service_images(["docker", "compose"], ["api"])
+
+    def test_image_fingerprint_ignores_only_compose_project_label(self) -> None:
+        image = {
+            "Config": {
+                "Env": ["PATH=/bin", "MODE=production"],
+                "Cmd": ["run"],
+                "Labels": {"com.docker.compose.project": "run-a", "app.version": "1"},
+            },
+            "RootFS": {"Type": "layers", "Layers": ["sha256:layer-a", "sha256:layer-b"]},
+            "Os": "linux",
+            "Architecture": "amd64",
+        }
+        changed_project = json.loads(json.dumps(image))
+        changed_project["Config"]["Labels"]["com.docker.compose.project"] = "run-b"
+        self.assertEqual(image_content_fingerprint(image), image_content_fingerprint(changed_project))
+        self.assertEqual(image["Config"]["Labels"]["com.docker.compose.project"], "run-a")
+
+        for field, change in (
+            ("layer contents", lambda candidate: candidate["RootFS"]["Layers"].__setitem__(1, "sha256:other")),
+            ("layers", lambda candidate: candidate["RootFS"]["Layers"].reverse()),
+            ("config", lambda candidate: candidate["Config"]["Env"].append("OTHER=1")),
+            ("other label", lambda candidate: candidate["Config"]["Labels"].update({"app.version": "2"})),
+            ("os", lambda candidate: candidate.update({"Os": "windows"})),
+            ("architecture", lambda candidate: candidate.update({"Architecture": "arm64"})),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(image))
+                change(changed)
+                self.assertNotEqual(image_content_fingerprint(image), image_content_fingerprint(changed))
+
+    def test_image_fingerprint_normalizes_inspect_api_defaults(self) -> None:
+        image = {
+            "Config": {"Cmd": ["run"], "Env": ["MODE=production"]},
+            "RootFS": {"Layers": ["sha256:layer"]},
+            "Os": "linux",
+            "Architecture": "amd64",
+        }
+        older_api = json.loads(json.dumps(image))
+        older_api["Config"].update({
+            "Hostname": "",
+            "Domainname": "",
+            "AttachStdin": False,
+            "Image": "",
+            "Entrypoint": None,
+            "Labels": {"com.docker.compose.project": "run-a"},
+            "OnBuild": [],
+            "User": "",
+            "Volumes": {},
+            "WorkingDir": "",
+        })
+        self.assertEqual(image_content_fingerprint(image), image_content_fingerprint(older_api))
+
+        for field, value in (
+            ("Cmd", ["different"]),
+            ("Healthcheck", {"Test": ["CMD", "true"]}),
+            ("ArgsEscaped", True),
+            ("Shell", ["/bin/bash", "-c"]),
+        ):
+            with self.subTest(field=field):
+                changed = json.loads(json.dumps(image))
+                changed["Config"][field] = value
+                self.assertNotEqual(image_content_fingerprint(image), image_content_fingerprint(changed))
+
+    def test_service_fingerprints_inspect_exact_image_ids(self) -> None:
+        task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
+        env = TaskEnv(task, "rb-test")
+        image_a = "sha256:" + "a" * 64
+        image_b = "sha256:" + "b" * 64
+        inspected = {
+            "Config": {"Labels": {"com.docker.compose.project": "rb-test"}},
+            "RootFS": {"Layers": ["sha256:layer"]},
+            "Os": "linux",
+            "Architecture": "amd64",
+        }
+        second = json.loads(json.dumps(inspected))
+        second["Config"]["Labels"]["com.docker.compose.project"] = "other-run"
+        responses = [
+            subprocess.CompletedProcess([], 0, json.dumps([image]), "")
+            for image in (inspected, second)
+        ]
+        with patch("rangebench.env._run", side_effect=responses) as run:
+            fingerprints = env.inspect_service_image_fingerprints({"api": image_a, "worker": image_b})
+        self.assertEqual(fingerprints["api"], fingerprints["worker"])
+        self.assertEqual(fingerprints["api"], image_content_fingerprint(inspected))
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [["docker", "image", "inspect", image_a], ["docker", "image", "inspect", image_b]],
+        )
 
     def test_attacker_command_timeout_is_enforced_inside_container(self) -> None:
         task = Task("sample", Path("/tmp"), "web", 1, "Find the flag")
@@ -517,6 +611,7 @@ class AccountingTests(unittest.TestCase):
         result.prompt_tokens = 100
         result.completion_tokens = 40
         result.service_image_ids = {"api": "sha256:" + "a" * 64}
+        result.service_image_fingerprints = {"api": "sha256:" + "b" * 64}
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 patch("rangebench.cli.RESULTS", Path(tmp)),
@@ -542,6 +637,7 @@ class AccountingTests(unittest.TestCase):
             self.assertIsNone(saved["cache_write_tokens"])
             self.assertEqual(saved["cache_read_reported_calls"], 2)
             self.assertEqual(saved["service_image_ids"], result.service_image_ids)
+            self.assertEqual(saved["service_image_fingerprints"], result.service_image_fingerprints)
             manifest = next(Path(tmp).glob("*/manifest.json"))
             manifest_data = json.loads(manifest.read_text())
             self.assertEqual(manifest_data["status"], "completed_with_errors")
@@ -558,6 +654,10 @@ class AccountingTests(unittest.TestCase):
             self.assertEqual(
                 manifest_data["service_image_ids"],
                 [{"task": task.id, "trial": 1, "images": result.service_image_ids}],
+            )
+            self.assertEqual(
+                manifest_data["service_image_fingerprints"],
+                [{"task": task.id, "trial": 1, "images": result.service_image_fingerprints}],
             )
 
     def test_preflight_stops_if_attacker_build_fails(self) -> None:

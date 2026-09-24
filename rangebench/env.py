@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -13,10 +14,68 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = ROOT / "tasks"
 ATTACKER_IMAGE = "rb-attacker:latest"
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+# Docker's inspect API has added and removed non-image Config fields across versions.
+# Keep the fields that belong to the image configuration.
+IMAGE_CONFIG_FIELDS = (
+    "User",
+    "ExposedPorts",
+    "Env",
+    "Entrypoint",
+    "Cmd",
+    "Volumes",
+    "WorkingDir",
+    "Labels",
+    "StopSignal",
+    "ArgsEscaped",
+    "Healthcheck",
+    "Shell",
+    "OnBuild",
+)
 
 
 class EnvError(RuntimeError):
     pass
+
+
+def image_content_fingerprint(image: dict) -> str:
+    """Hash layers and image config across Docker inspect API versions."""
+    config = image.get("Config")
+    rootfs = image.get("RootFS")
+    if not isinstance(config, dict) or not isinstance(rootfs, dict):
+        raise EnvError("image inspect is missing Config or RootFS")
+    layers = rootfs.get("Layers")
+    if not isinstance(layers, list) or any(not isinstance(layer, str) for layer in layers):
+        raise EnvError("image inspect has invalid RootFS layers")
+    os_name = image.get("Os")
+    architecture = image.get("Architecture")
+    if (
+        not isinstance(os_name, str)
+        or not os_name
+        or not isinstance(architecture, str)
+        or not architecture
+    ):
+        raise EnvError("image inspect is missing OS or architecture")
+    normalized_config = {}
+    for name in IMAGE_CONFIG_FIELDS:
+        value = config.get(name)
+        if name == "Labels" and value is not None:
+            if not isinstance(value, dict):
+                raise EnvError("image inspect has invalid Config labels")
+            value = {key: label for key, label in value.items() if key != COMPOSE_PROJECT_LABEL}
+        if value is None or value is False or isinstance(value, (str, list, dict)) and not value:
+            continue
+        normalized_config[name] = value
+    payload = {
+        "Config": normalized_config,
+        "RootFS.Layers": layers,
+        "Os": os_name,
+        "Architecture": architecture,
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass
@@ -112,6 +171,7 @@ class TaskEnv:
         self.attacker = f"{project}-atk"
         self.attacker_image = attacker_image
         self.service_image_ids: dict[str, str] = {}
+        self.service_image_fingerprints: dict[str, str] = {}
 
     def up(self, build: bool = True) -> None:
         compose = [
@@ -147,6 +207,9 @@ class TaskEnv:
             full = net if "_" in net else f"{self.project}_{net}"
             nets.append(full)
         self.service_image_ids = self.inspect_service_images(compose, services)
+        self.service_image_fingerprints = self.inspect_service_image_fingerprints(
+            self.service_image_ids
+        )
         self.verify_isolation(nets)
         vol_args: list[str] = []
         for v in self.task.shared_volumes:
@@ -255,6 +318,34 @@ class TaskEnv:
                 raise EnvError(f"{self.task.id}: invalid image ID for service {service}")
             images[service] = image_ids.pop()
         return images
+
+    def inspect_service_image_fingerprints(self, images: dict[str, str]) -> dict[str, str]:
+        """Inspect the exact container image IDs and hash their stable contents."""
+        fingerprints: dict[str, str] = {}
+        by_image_id: dict[str, str] = {}
+        for service, image_id in images.items():
+            if image_id not in by_image_id:
+                output = _run(["docker", "image", "inspect", image_id], timeout=30).stdout
+                try:
+                    inspected = json.loads(output)
+                except json.JSONDecodeError as exc:
+                    raise EnvError(
+                        f"{self.task.id}: invalid image inspect for service {service}"
+                    ) from exc
+                if (
+                    not isinstance(inspected, list)
+                    or len(inspected) != 1
+                    or not isinstance(inspected[0], dict)
+                ):
+                    raise EnvError(f"{self.task.id}: invalid image inspect for service {service}")
+                try:
+                    by_image_id[image_id] = image_content_fingerprint(inspected[0])
+                except EnvError as exc:
+                    raise EnvError(
+                        f"{self.task.id}: invalid image inspect for service {service}: {exc}"
+                    ) from exc
+            fingerprints[service] = by_image_id[image_id]
+        return fingerprints
 
     def verify_isolation(self, attacker_networks: list[str]) -> None:
         """Reject Compose networks that would let a model reach outside the lab."""

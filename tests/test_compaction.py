@@ -286,6 +286,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
 
             def up(self) -> None:
                 pass
@@ -434,6 +435,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
 
             def up(self) -> None:
                 pass
@@ -554,6 +556,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
 
             def up(self) -> None:
                 pass
@@ -602,6 +605,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
 
             def up(self) -> None:
                 pass
@@ -643,6 +647,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
 
             def up(self) -> None:
                 pass
@@ -698,6 +703,7 @@ class CompactionTests(unittest.TestCase):
         class FakeEnv:
             def __init__(self, task: object, project: str, attacker_image: str = "") -> None:
                 self.service_image_ids = {"target": "sha256:test"}
+                self.service_image_fingerprints = {"target": "sha256:fingerprint"}
                 self.executions = 0
 
             def up(self) -> None:
