@@ -948,7 +948,11 @@ def run_attempt(
                 )
 
         else:
-            if time.time() >= wall_deadline:
+            if time.time() > infra_deadline:
+                # Mirror the turn-start precedence: the infra guard is
+                # non-scoring, so it wins when both deadlines passed.
+                res.end_reason = "infra timeout"
+            elif time.time() >= wall_deadline:
                 # The final finite turn ran past the cap; no next
                 # iteration remains for the between-turns check above.
                 res.end_reason = "wall_clock_exceeded"

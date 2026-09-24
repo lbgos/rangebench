@@ -228,6 +228,40 @@ class WallClockTests(unittest.TestCase):
         self.assertTrue(result.wall_clock_exceeded)
         self.assertEqual(result.wall_clock_seconds, 60)
 
+    def test_final_turn_past_both_deadlines_keeps_infra_precedence(self) -> None:
+        now = [1000.0]
+
+        def fake_time() -> float:
+            return now[0]
+
+        base_exec = FakeEnv.exec
+
+        def advancing_exec(self: FakeEnv, cmd: str, **kwargs: object) -> tuple[int, str]:
+            now[0] += 12000.0  # past the 60s wall clock and the 180min infra guard
+            return base_exec(self, cmd, **kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("rangebench.runner.TaskEnv", FakeEnv),
+            patch.object(FakeEnv, "exec", advancing_exec),
+            patch("rangebench.runner.time.time", side_effect=fake_time),
+        ):
+            task = Task(
+                "sample",
+                Path(tmp),
+                "web",
+                1,
+                "Find the flag",
+                stages=[Stage("one", "/flag", "target")],
+                turns=1,
+                cmd_timeout=120,
+                wall_clock=60,
+            )
+            result = run_attempt(LoopClient(), task, 1, "rb-test", Path(tmp), verbose=False)
+        # Mirrors the turn-start precedence: the non-scoring infra guard wins.
+        self.assertEqual(result.end_reason, "infra timeout")
+        self.assertFalse(result.wall_clock_exceeded)
+
     def test_wall_clock_trip_stays_scored(self) -> None:
         task = Task(
             "sample", Path("/tmp"), "web", 1, "Find the flag", stages=[Stage("one", "/flag", "web")]
