@@ -558,6 +558,9 @@ class CompactionTests(unittest.TestCase):
             def up(self) -> None:
                 pass
 
+            def read_flag(self, stage: object) -> str:
+                return "flag{web}"
+
             def down(self) -> tuple[bool, None]:
                 return True, None
 
@@ -574,8 +577,8 @@ class CompactionTests(unittest.TestCase):
         task = SimpleNamespace(
             id="output-cap",
             statement="A small task",
-            stages=[],
-            turns=1,
+            stages=[SimpleNamespace(name="web")],
+            turns=2,
             infra_timeout=5,
             max_tokens=32768,
             max_output_tokens=100000,
@@ -586,7 +589,7 @@ class CompactionTests(unittest.TestCase):
             result = run_attempt(
                 client, task, 1, "test", Path(directory), verbose=False, ctx_window=50000
             )
-        self.assertEqual(client.limits, [32768, 16384, 8192])
+        self.assertEqual(client.limits, [32768, 16384, 8192, 8192])
         self.assertEqual(result.effective_ctx_window, 50000)
         self.assertNotEqual(result.end_reason, "llm error")
 

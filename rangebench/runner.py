@@ -569,6 +569,7 @@ def run_attempt(
     empty_streak = 0
     previous_prompt_tokens = 0
     previous_estimate = 0
+    generation_cap = task.max_tokens
 
     try:
         for turn in range(1, task.turns + 1):
@@ -587,7 +588,6 @@ def run_attempt(
                 )
                 break
             res.turns_used = turn
-            generation_cap = task.max_tokens
             for retry in range(9):
                 messages = _maybe_compact(
                     client,

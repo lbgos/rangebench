@@ -96,7 +96,7 @@ class AccountingTests(unittest.TestCase):
                         error,
                         f"malformed token usage: {input_key} must be a non-negative integer",
                     )
-                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (1, 1, 1))
+                    self.assertEqual((usage.calls, usage.requests, usage.reported_calls), (0, 1, 0))
                     urlopen.assert_called_once()
 
         usage = Usage()
@@ -148,8 +148,10 @@ class AccountingTests(unittest.TestCase):
 
         for total in (True, -1, 5, "76"):
             with self.subTest(total=total):
+                invalid = Usage()
                 with self.assertRaisesRegex(ValueError, "total_tokens"):
-                    Usage().add({"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": total})
+                    invalid.add({"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": total})
+                self.assertEqual(invalid.as_dict(), Usage().as_dict())
 
     def test_openai_cache_and_missing_metadata_are_distinct(self) -> None:
         usage = Usage()

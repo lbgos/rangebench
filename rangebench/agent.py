@@ -55,10 +55,9 @@ class Usage:
     cache_write_reported_calls: int = 0
 
     def add(self, other: dict | None, *, provider: str = "openai") -> None:
-        self.calls += 1
         if not isinstance(other, dict):
+            self.calls += 1
             return
-        self.reported_calls += 1
         token_fields = (
             "prompt_tokens",
             "input_tokens",
@@ -96,6 +95,17 @@ class Usage:
         output_details = other.get("completion_tokens_details") or {}
         if not output_details:
             output_details = other.get("output_tokens_details") or {}
+        completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
+        if provider != "anthropic" and "total_tokens" in other:
+            reported_input = int(other.get("prompt_tokens") or other.get("input_tokens") or 0)
+            total = other["total_tokens"]
+            if total < reported_input + completion:
+                raise TokenUsageError(
+                    "malformed token usage: total_tokens is below input plus output"
+                )
+            completion = max(completion, total - reported_input)
+        self.calls += 1
+        self.reported_calls += 1
         has_input = (
             other.get("input_tokens") is not None
             if provider == "anthropic"
@@ -139,15 +149,6 @@ class Usage:
         )
         # OpenAI completion_tokens already includes reasoning_tokens. Keep the
         # latter as a breakdown, not an additional charge against the budget.
-        completion = int(other.get("completion_tokens") or other.get("output_tokens") or 0)
-        if provider != "anthropic" and "total_tokens" in other:
-            reported_input = int(other.get("prompt_tokens") or other.get("input_tokens") or 0)
-            total = other["total_tokens"]
-            if total < reported_input + completion:
-                raise TokenUsageError(
-                    "malformed token usage: total_tokens is below input plus output"
-                )
-            completion = max(completion, total - reported_input)
         self.completion_tokens += max(completion, reasoning)
         self.reasoning_tokens += reasoning
 
