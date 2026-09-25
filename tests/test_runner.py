@@ -181,6 +181,14 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(exec_rec["out"], truncate_output(output))
         self.assertEqual(messages[-1]["content"], f"OBSERVATION (exit 0):\n{truncate_output(output)}")
 
+    def test_threshold_boundary_counts_final_line_without_newline(self) -> None:
+        output = "\n".join(f"line {i}" for i in range(401))
+        self.assertEqual(output.count("\n"), 400)  # old threshold would skip it
+        records, _messages, saved = self._run_with_output(output)
+        self.assertEqual(saved, [output])
+        exec_rec = next(r for r in records if r["kind"] == "exec")
+        self.assertEqual(exec_rec["pager"], {"path": "/work/obs/0001.log", "lines": 401})
+
     def test_long_output_is_saved_and_previewed(self) -> None:
         output = "\n".join(f"line {i}" for i in range(1, 1001)) + "\n"
         records, messages, saved = self._run_with_output(output)

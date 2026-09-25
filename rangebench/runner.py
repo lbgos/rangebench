@@ -685,14 +685,15 @@ def _observation(
     env: TaskEnv, out: str, emit: Callable[..., None]
 ) -> tuple[str, dict[str, Any] | None]:
     """Model-facing observation plus pager info when the output was saved for paging."""
-    if out.count("\n") <= PAGER_LINES:
+    # Physical lines, matching sed: a final line without a newline still counts.
+    lines = out.removesuffix("\n").count("\n") + 1
+    if lines <= PAGER_LINES:
         return truncate_output(out), None
     try:
         path = env.save_output(out)
     except Exception as exc:
         emit("pager-save-failed", error=str(exc)[:300])
         return truncate_output(out), None
-    lines = out.removesuffix("\n").count("\n") + 1
     return pager_preview(out, path), {"path": path, "lines": lines}
 
 
