@@ -1,0 +1,7 @@
+{
+  "name": "stage-control",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "render-stage control service (no runtime dependencies)"
+}
