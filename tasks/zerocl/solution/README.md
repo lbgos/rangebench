@@ -85,6 +85,10 @@ path. 9/9 checks passed:
 - negative control: the lab's space-before-colon poison (`Content-Length : N`)
   creates no BE debt (tainted name), the pipelined block is consumed as an
   ordinary request body, and no `<script>` ever reaches any poll.
+- negative control: send-and-disconnect (`GET /search` with an exfil Referer,
+  then close before the response is routed) plants nothing: the orphaned
+  response is discarded instead of banked, the admin's polls stay clean, and
+  the listener records no hit. Only the desync shift banks surplus frames.
 
 The proof caught two real bugs that static review missed, both fixed:
 

@@ -21,6 +21,10 @@ requests held by the gate resume in the order they completed client-side.
 Responses are attributed positionally: one arriving when nobody is awaiting
 is banked as overflow debt, and new requests are served from overflow before
 their own queue position - the response-queue shift the desync exploits.
+A banked frame is only kept when its wait was consumed by an earlier
+response (the queue shift); a response orphaned because its client
+disconnected is discarded, so a stray reflected page can never land in
+another client's poll without the desync.
 
 A forwarded request that gets no response within RESPONSE_TIMEOUT answers
 504 (the naive 0.CL deadlock observable) and resets the upstream slot.
@@ -119,6 +123,9 @@ class Front:
         # Positional bookkeeping on the single poisonable slot.
         self.await_fifo: list[tuple[Client, str]] = []  # (conn, method)
         self.overflow: list[bytes] = []
+        # True when the slot's current expectation was orphaned by a client
+        # disconnect instead of consumed by a response (see close_client).
+        self.abandoned = False
         # Fully-framed client requests held until the slot frees.
         self.held: list[tuple[Client, bytes, str, int]] = []  # (conn, head, method, declared)
         self.has_inflight = False
@@ -187,7 +194,13 @@ class Front:
         self.clients.pop(conn.sock, None)
         conn.stage = "closed"
         self.held = [h for h in self.held if h[0] is not conn]
+        await_before = len(self.await_fifo)
         self.await_fifo = [(c, m) for c, m in self.await_fifo if c is not conn]
+        if len(self.await_fifo) < await_before:
+            # Its forwarded request may still answer: mark the slot's wait
+            # orphaned so complete_response discards the stray frame instead
+            # of banking it into another client's poll.
+            self.abandoned = True
 
     def accept(self) -> None:
         assert self.server is not None
@@ -334,7 +347,14 @@ class Front:
             self.has_inflight = False
             self.release_gate()
             return
-        self.overflow.append(frame)
+        if self.abandoned:
+            # Nobody waited for this frame: its client disconnected after
+            # forwarding. Discard it; surplus frames from the queue shift
+            # (owner still connected) still bank below.
+            log("dropping response orphaned by client disconnect")
+            self.abandoned = False
+        else:
+            self.overflow.append(frame)
         self.has_inflight = False
         self.release_gate()
 
@@ -363,6 +383,7 @@ class Front:
             conn, _method = self.await_fifo.pop(0)
             conn.pending += RESP_504
             self.flush_client(conn)
+        self.abandoned = False
         self.upstream_close_stalled()
         self.has_inflight = False
         self.release_gate()
