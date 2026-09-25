@@ -121,6 +121,19 @@ EOF
 # the airgap image imported. This is the real infra gate for the boot.
 $K wait --for=condition=Ready pod/ledger-sync-01 -n billing --timeout=180s
 
+# On a rerun the secret above is updated in place while the pod stays Ready,
+# and kubelet refreshes the projected volume asynchronously. Gate the rest of
+# the seed on the mount converging so solver creds never pair with a stale
+# flag. Fresh boots pass on the first poll.
+mounted_flag=""
+i=0
+while [ "$mounted_flag" != "$FLAG" ] && [ "$i" -lt 150 ]; do
+    mounted_flag="$($K exec -n billing ledger-sync-01 -- cat /srv/ledger/snapshots/current.token 2>/dev/null || true)"
+    [ "$mounted_flag" = "$FLAG" ] || sleep 1
+    i=$((i + 1))
+done
+[ "$mounted_flag" = "$FLAG" ] || { echo "seeder: ledger-sync-01 never projected the current flag" >&2; exit 1; }
+
 # Attacker-facing credential: monitor SA token + cluster CA + API URL, and
 # nothing else in the volume (the harness reference never lives here).
 $K create token ledger-monitor -n billing --duration=24h > /out/monitor-token
