@@ -170,7 +170,7 @@ def main() -> int:
             if stream == 0xFF or (data and data[0] == 0xFF):
                 continue
     except (socket.timeout, OSError):
-        pass
+        return 1
     finally:
         if not sent_close:
             try:
