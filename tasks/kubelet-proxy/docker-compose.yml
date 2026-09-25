@@ -1,0 +1,105 @@
+services:
+  k3s-server:
+    build: src/server
+    privileged: true
+    # sqlite datastore (no --cluster-init); --disable-agent keeps the control
+    # plane off the data path so k3s-agt-01 is the only node.
+    command:
+      - server
+      - --node-name=k3s-srv-01
+      - --disable-agent
+      - --disable=traefik
+      - --disable=servicelb
+      - --disable=coredns
+      - --disable=local-storage
+      - --disable=metrics-server
+      - --token=k3sbench-kubelet-proxy-01
+      - --tls-san=k3s-server
+      - --tls-san=10.60.0.10
+      - --tls-san=10.61.0.10
+      - --kube-apiserver-arg=audit-log-path=/dev/null
+    volumes:
+      - server-data:/var/lib/rancher/k3s
+      - server-config:/etc/rancher/k3s
+      - solver-creds:/creds:ro
+    networks:
+      cluster-net:
+        ipv4_address: 10.60.0.10
+      solver-net:
+        ipv4_address: 10.61.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get --raw=/readyz 2>/dev/null | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  k3s-agent:
+    build: src/agent
+    privileged: true
+    # KEP-2862 is not merely left off: the 1.31 pin predates the gate entirely,
+    # so the coarse get-nodes/proxy exec mapping this task teaches is the only
+    # behavior the kubelet can have.
+    command:
+      - agent
+      - --node-name=k3s-agt-01
+      - --server=https://10.60.0.10:6443
+      - --token=k3sbench-kubelet-proxy-01
+      - --node-ip=10.61.0.20
+    volumes:
+      - agent-data:/var/lib/rancher/k3s
+      - flagshare:/flagshare:ro
+      - /lib/modules:/lib/modules:ro
+    networks:
+      cluster-net:
+        ipv4_address: 10.60.0.20
+      solver-net:
+        ipv4_address: 10.61.0.20
+    depends_on:
+      k3s-server:
+        condition: service_healthy
+
+  seeder:
+    build: src/seeder
+    # The kubectl base pins USER=kubectl, but the admin kubeconfig and the
+    # shared volumes are root-owned; run the seed as root (it is
+    # cluster-net-only and one-shot, never attacker-reachable).
+    user: "0"
+    # Bind mounts keep the tool payload (vendored websocat + fallback) next
+    # to the source; the seed script itself is baked into the image.
+    volumes:
+      - server-data:/serverdata:ro
+      - server-config:/k3scfg:ro
+      - flagshare:/flagshare
+      - solver-creds:/out
+      - ./src/tools:/tools:ro
+      - solver-tools:/tools-out
+    networks:
+      - cluster-net
+    depends_on:
+      k3s-server:
+        condition: service_healthy
+      k3s-agent:
+        condition: service_started
+
+volumes:
+  server-data: {}
+  server-config: {}
+  agent-data: {}
+  flagshare: {}
+  solver-creds: {}
+  solver-tools: {}
+
+networks:
+  cluster-net:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.60.0.0/24
+          gateway: 10.60.0.1
+  solver-net:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.61.0.0/24
+          gateway: 10.61.0.1
