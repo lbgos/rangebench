@@ -269,6 +269,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             base_url=base,
             api_key=os.environ.get("OPENAI_API_KEY", "dummy"),
             model=args.model,
+            reasoning_effort=getattr(args, "reasoning_effort", None),
         )
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
     log_dir = RESULTS / run_id
@@ -469,7 +470,12 @@ def cmd_probe(args: argparse.Namespace) -> None:
             args.model,
         )
     else:
-        client = ChatClient(base, os.environ.get("OPENAI_API_KEY", "dummy"), args.model)
+        client = ChatClient(
+            base,
+            os.environ.get("OPENAI_API_KEY", "dummy"),
+            args.model,
+            reasoning_effort=getattr(args, "reasoning_effort", None),
+        )
     content, usage, err = client.chat(
         [{"role": "user", "content": "Reply with exactly: COMMAND:\necho ok"}], 512
     )
@@ -565,11 +571,17 @@ def main() -> None:
         default="llm",
         help="compaction mode, same-model llm is the default",
     )
+    run.add_argument(
+        "--reasoning-effort",
+        default=None,
+        help="openai-compatible reasoning effort knob sent to the provider (e.g. high, max)",
+    )
     run.set_defaults(func=cmd_run)
     probe = sub.add_parser("probe")
     probe.add_argument("--model", required=True)
     probe.add_argument("--base-url", default=None)
     probe.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    probe.add_argument("--reasoning-effort", default=None)
     probe.set_defaults(func=cmd_probe)
     pf = sub.add_parser("preflight", help="pull all images and check docker setup")
     pf.set_defaults(func=cmd_preflight)
