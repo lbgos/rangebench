@@ -1,0 +1,12 @@
+services:
+  reservoir:
+    build: src
+    volumes:
+      - bin:/binshare
+    networks:
+      - default
+volumes:
+  bin: {}
+networks:
+  default:
+    internal: true
