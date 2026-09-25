@@ -78,7 +78,8 @@ chmod 444 /flagshare/flag.ref
 # /srv/ledger/snapshots (mode 0440, root:65532 via fsGroup): the pod runs as
 # non-root 65532, so the snapshot is readable only by exec'ing into the
 # container — no env leak, no writable path, no API shortcut.
-$K create secret generic ledger-snap -n billing --from-file=current.token=/flagshare/flag.ref
+$K create secret generic ledger-snap -n billing --from-file=current.token=/flagshare/flag.ref \
+    --dry-run=client -o yaml | $K apply -f - >/dev/null
 
 $K apply -f - <<'EOF'
 apiVersion: v1
