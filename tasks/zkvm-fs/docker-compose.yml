@@ -1,0 +1,12 @@
+services:
+  verifier:
+    build: verifier
+    volumes:
+      - harness:/harness-share
+    networks:
+      - default
+volumes:
+  harness: {}
+networks:
+  default:
+    internal: true

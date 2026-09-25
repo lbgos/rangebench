@@ -1,0 +1,19 @@
+[package]
+name = "nexus-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Developer harness for the zkvm-fs task: verifier service + forge tool."
+
+[[bin]]
+name = "nexus-harness"
+path = "src/main.rs"
+
+[dependencies]
+nexus-core = { path = "../../core" }
+nexus-sdk = { path = "../../sdk" }
+nexus-vm = { path = "../../vm" }
+stwo = { workspace = true }
+postcard = { version = "1.0.10", default-features = false, features = ["alloc", "use-std"] }
+serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"

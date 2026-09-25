@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "runtime",
+    "prover",
+    "vm",
+    "precompiles",
+    "common",
+    "core",
+    "sdk",
+    "guest",
+    "crates/harness",
+]
+default-members = ["runtime", "prover", "vm", "precompiles", "common", "core", "sdk", "crates/harness"]
+
+[workspace.package]
+edition = "2021"
+version = "0.3.4"
+authors = ["The Nexus Team <hello@nexus.xyz>"]
+homepage = "https://nexus.xyz/"
+repository = "https://github.com/nexus-xyz/nexus-zkvm/"
+keywords = ["nexus", "zero-knowledge", "zkvm", "cryptography", "proofs"]
+categories = ["cryptography"]
+publish = false
+
+[workspace.dependencies]
+clap = { version = "4.3", features = ["derive"] }
+num-traits = "0.2"
+num-derive = "0.4.2"
+serde = { version = "1.0", features = ["derive"] }
+stwo = { git = "https://github.com/starkware-libs/stwo", rev = "0790eba", features = [
+    "std",
+    "prover",
+    "parallel",
+] }
+stwo-constraint-framework = { git = "https://github.com/starkware-libs/stwo", rev = "0790eba", features = [
+    "std",
+    "prover",
+    "parallel",
+] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+# This profile is used for CI tests. Optimized for faster compilation vs. absolute speed.
+[profile.ci-test]
+inherits = "release"
+debug = true
+lto = "thin"
+
+[profile.release]
+codegen-units = 4
+lto = "thin"
+
+[profile.bench]
+inherits = "release"
+debug = true
