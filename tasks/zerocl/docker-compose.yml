@@ -1,0 +1,48 @@
+services:
+  backend:
+    build: backend
+    networks:
+      - core
+    volumes:
+      - flagvol:/state
+    entrypoint: >
+      sh -c 'FLAG="flag{$$(head -c16 /dev/urandom | od -An -tx1 | tr -d " \n")}" ;
+      echo "$$FLAG" > /flag; chmod 400 /flag;
+      echo "$$FLAG" > /state/session; chmod 444 /state/session;
+      export FLAG; exec python3 /app/backend.py'
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()\""]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  frontend:
+    build: frontend
+    networks:
+      - default
+      - core
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; assert b'ok' in urllib.request.urlopen('http://127.0.0.1:80/__health', timeout=3).read()\""]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+  victim:
+    build: victim
+    networks:
+      - default
+    depends_on:
+      frontend:
+        condition: service_healthy
+    volumes:
+      - flagvol:/state:ro
+    entrypoint: >
+      sh -c 'COOKIE="session=$$(cat /state/session)"; export COOKIE; exec python3 /app/bot.py'
+networks:
+  default:
+    internal: true
+  core:
+    internal: true
+volumes:
+  flagvol: {}
