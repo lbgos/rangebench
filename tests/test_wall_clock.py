@@ -99,7 +99,7 @@ class WallClockTests(unittest.TestCase):
                     load_task("sample")
 
     def test_real_tasks_get_tier_defaults(self) -> None:
-        self.assertEqual(load_task("net-recon").wall_clock, 600)
+        self.assertEqual(load_task("lfi-portal").wall_clock, 600)
 
     def test_expired_cap_ends_attempt_before_any_model_call(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch("rangebench.runner.TaskEnv", FakeEnv):

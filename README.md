@@ -1,6 +1,6 @@
 # rangebench
 
-A small cyber bench I run for local models. 21 tasks across web, pwn, crypto, rev, forensics, linux, and two multi-stage ranges. Each flag is random per run, generated inside the target.
+A small cyber bench I run for local models. 14 tasks across web, pwn, crypto, rev, and three multi-stage ranges. Each flag is random per run, generated inside the target.
 
 I run it on my own hardware against any OpenAI compatible endpoint.
 
@@ -8,11 +8,11 @@ I run it on my own hardware against any OpenAI compatible endpoint.
 
 | tier | tasks | turns |
 | --- | --- | --- |
-| T1 | net-recon, log-trace, jwt-none, git-bounty | 30 |
-| T2 | sqli-shop, lfi-portal, pwn-stack1, rsa-little, sudo-tar | 60 |
+| T1 | — | 30 |
+| T2 | lfi-portal | 60 |
 | T3 | pwn-stack2, fmt-wallet, waf-bypass, ssrf-cloud, rev-license | 120 |
 | T4 | heap-note, pwn-orw, java-rev, padding-oracle, range-ci | 200 |
-| T5 | range-corp, range-dind | 300 |
+| T5 | range-corp, range-dind, node-esm | 300 |
 
 Per-turn limit is 32k tokens, reduced when a smaller model context window leaves less room. The harness context ceiling is 258k tokens; pass `--ctx-window` for models with a smaller window.
 
@@ -33,7 +33,7 @@ You need Docker with the compose plugin and Python 3.11 or newer.
 ```bash
 python3 -m rangebench preflight
 python3 -m rangebench list
-python3 -m rangebench check net-recon jwt-none
+python3 -m rangebench check lfi-portal pwn-stack2
 ```
 
 Run a model:
@@ -41,14 +41,14 @@ Run a model:
 ```bash
 export OPENAI_BASE_URL=http://localhost:8000/v1
 export OPENAI_API_KEY=dummy
-python3 -m rangebench run --model my-model net-recon jwt-none --trials 1
+python3 -m rangebench run --model my-model lfi-portal pwn-stack2 --trials 1
 python3 -m rangebench run --model my-model range-corp --ctx-window 128000
 ```
 
 Drive an env by hand:
 
 ```bash
-./scripts/bench-remote up net-recon myproj
+./scripts/bench-remote up lfi-portal myproj
 ./scripts/bench-remote exec myproj "nmap -sn 10.0.0.0/24"
 ./scripts/bench-remote down myproj
 ```
