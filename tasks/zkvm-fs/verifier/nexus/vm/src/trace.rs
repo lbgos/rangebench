@@ -18,7 +18,8 @@ use crate::{
 /// view is overwritten with the given bytes, starting at the layout's public
 /// output address, padded to 4-byte alignment. This mirrors exactly the byte
 /// encoding that `sdk::Verifiable::verify_expected` derives from the expected
-/// output, so a proof can be produced for a fixed false statement. The verifier
+/// output, so a proof can be produced for a fixed false statement. Payloads that
+/// do not fit the public-output region (after padding) are ignored. The verifier
 /// service never sets this variable; its verification path does not execute the
 /// guest program at all.
 fn force_output_view(view: &mut View) {
@@ -36,6 +37,13 @@ fn force_output_view(view: &mut View) {
         return;
     };
     let start = layout.public_output_start();
+    let capacity = (layout.public_output_end() - start) as usize;
+    let mut bytes = bytes;
+    let padded_len = bytes.len().next_multiple_of(crate::WORD_SIZE);
+    if padded_len > capacity {
+        return;
+    }
+    bytes.resize(padded_len, 0);
     let mut output_memory: Vec<crate::emulator::PublicOutputEntry> = Vec::new();
     for (i, b) in bytes.iter().enumerate() {
         output_memory.push(crate::emulator::PublicOutputEntry {
