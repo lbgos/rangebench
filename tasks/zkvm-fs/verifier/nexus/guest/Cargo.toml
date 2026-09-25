@@ -1,0 +1,15 @@
+[package]
+name = "fltea-guest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Guest program: Fermat checker over fixed public inputs (a,b,c)."
+
+[dependencies]
+nexus-rt = { path = "../runtime" }
+
+[lints.clippy]
+all = { level = "allow", priority = 0 }
+
+[features]
+default = []

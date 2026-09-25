@@ -1,0 +1,19 @@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/GregAC/rrs/"]
+git = "https://github.com/GregAC/rrs/"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/starkware-libs/stwo?rev=0790eba"]
+git = "https://github.com/starkware-libs/stwo"
+rev = "0790eba"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[target.riscv32im-unknown-none-elf]
+rustflags = [
+  "-C", "link-arg=-Tlink.x",
+]
