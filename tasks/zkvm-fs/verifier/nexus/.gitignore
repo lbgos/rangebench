@@ -1,5 +1,8 @@
 target
 Cargo.lock
+# The verifier builds with cargo --offline from the vendored sources; the
+# workspace lock must be committed for offline resolution to be possible.
+!Cargo.lock
 
 # test binaries
 *.elf
