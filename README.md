@@ -1,5 +1,15 @@
 # rangebench
 
+> **Archived v1/v1.1 benchmark.** This repository contains the historical tasks
+> and runner used for those editions. It is not the current RangeBench harness.
+>
+> For new runs and harness development, use
+> [rangebench-harness](https://github.com/lbgos/rangebench-harness).
+> The current evaluation tasks are closed source and distributed separately.
+> Results and methodology: [lbgos.dev/bench](https://lbgos.dev/bench).
+
+The instructions below describe this archived version only.
+
 A small cyber bench I run for local models. 21 tasks across web, pwn, crypto, rev, forensics, linux, and two multi-stage ranges. Each flag is random per run, generated inside the target.
 
 I run it on my own hardware against any OpenAI compatible endpoint.
